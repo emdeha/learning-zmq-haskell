@@ -9,17 +9,22 @@ module Main where
 import System.ZMQ4.Monadic
 import System.Random
 import Control.Monad (forever)
-import Data.ByteString.Char8 (pack, unpack)
 import Control.Concurrent (threadDelay)
+import Data.ByteString.Char8 (pack, unpack)
 
 
 rand :: IO Int
 rand = liftIO $ getStdRandom (randomR (0, maxBound))
 
+sendID :: (Sender b) => Socket z b -> ZMQ z ()
+sendID sender = do
+    id <- liftIO $ rand
+    send sender [] (pack $ show id)
+
 sendInput :: (Sender b) => Socket z b -> ZMQ z ()
-sendInput sock = do
+sendInput sender = do
     input <- liftIO $ getLine
-    send sock [] (pack input)
+    send sender [] (pack input)
 
 main :: IO ()
 main =  
@@ -30,12 +35,10 @@ main =
 
         forever $ do
             msg <- receive repSocket
-            (liftIO . putStrLn . unwords) ["Received request: ", unpack msg]
+            (liftIO . putStrLn . unwords) [unpack msg]
 
             liftIO $ threadDelay (1 * 1000 * 1000)
 
             if unpack msg == "id"
-            then do 
-                id <- liftIO $ rand
-                send repSocket [] (pack $ show id)
+            then sendID repSocket
             else sendInput repSocket

@@ -7,8 +7,13 @@
 module Main where
 
 import System.ZMQ4.Monadic
-import Control.Monad (forM_)
+import Control.Monad (forever)
 import Data.ByteString.Char8 (pack, unpack)
+
+sendInput :: (Sender b) => Socket z b -> String -> ZMQ z ()
+sendInput sender id = do
+    input <- liftIO $ getLine
+    send sender [] (pack $ id ++ ": " ++ input)
 
 main :: IO ()
 main =
@@ -20,9 +25,9 @@ main =
         liftIO $ putStrLn "Getting ID"
         send reqSocket [] (pack $ "id")
         id <- receive reqSocket
+        liftIO $ putStrLn $ unwords ["ID: ", unpack id]
 
-        forM_ [1..10] $ \i -> do
-            liftIO $ putStrLn $ unwords ["Sending request", show i]
-            send reqSocket [] (pack $ "Hello " ++ (show i) ++ " | ID: " ++ (unpack id))
+        forever $ do
+            sendInput reqSocket (unpack id)
             reply <- receive reqSocket
-            liftIO $ putStrLn $ unwords ["Received reply:", unpack reply]
+            liftIO $ putStrLn $ unwords ["server: ", unpack reply]
