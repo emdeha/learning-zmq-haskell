@@ -16,6 +16,11 @@ import Control.Concurrent (threadDelay)
 rand :: IO Int
 rand = liftIO $ getStdRandom (randomR (0, maxBound))
 
+sendInput :: (Sender b) => Socket z b -> ZMQ z ()
+sendInput sock = do
+    input <- liftIO $ getLine
+    send sock [] (pack input)
+
 main :: IO ()
 main =  
     runZMQ $ do
@@ -33,4 +38,4 @@ main =
             then do 
                 id <- liftIO $ rand
                 send repSocket [] (pack $ show id)
-            else send repSocket [] (pack "World")
+            else sendInput repSocket
