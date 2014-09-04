@@ -25,6 +25,8 @@ main :: IO ()
 main =
     runZMQ $ do
         publisher <- socket Pub
+        -- We set the high-water mark in order to be able to send all of
+        -- the 10000 messages
         setSendHighWM (restrict nbOfUpdate) publisher
         bind publisher "tcp://*:5561"
 
