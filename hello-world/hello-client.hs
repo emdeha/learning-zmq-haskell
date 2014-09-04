@@ -14,6 +14,7 @@ sendInput :: (Sender b) => Socket z b -> String -> ZMQ z ()
 sendInput sender id = do
     input <- liftIO $ getLine
     send sender [] (pack $ id ++ ": " ++ input)
+    --send sender [] (pack "Hello")
 
 main :: IO ()
 main =
