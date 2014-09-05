@@ -34,8 +34,8 @@ main =
             id <- requestId ctx
             putStrLn $ "id received: " ++ id
 
-            --partner <- requestPartner ctx
-            --subscribe in_sock (pack partner)
+            partner <- requestPartner ctx
+            subscribe in_sock (pack partner)
 
             forever $ do
                 resp <- getLine

@@ -6,7 +6,7 @@ module Main where
 import System.ZMQ4.Monadic
 import System.Random
 import Control.Monad (forever)
-import Data.ByteString.Char8 (pack)
+import Data.ByteString.Char8 (pack, unpack)
 
 
 getID :: IO Int
@@ -19,8 +19,14 @@ listenReqs = do
     bind id_resp_sock "tcp://*:6000"
     forever $ do
         req <- receive id_resp_sock
-        id <- liftIO getID
-        send id_resp_sock [] (pack $ show id)
+        finishRequest id_resp_sock (unpack req)
+
+finishRequest :: Socket z Rep -> String -> ZMQ z ()
+finishRequest sock req = do
+    case req of
+        "gid" -> do 
+            id <- liftIO getID
+            send sock [] (pack $ show id)
 
 
 main :: IO ()
