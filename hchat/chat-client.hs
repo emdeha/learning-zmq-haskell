@@ -19,9 +19,6 @@ requestId ctx =
         id <- receive id_sock
         return $ unpack id
 
-requestPartner :: Context -> IO String
-requestPartner ctx = undefined
-
 
 main :: IO ()
 main = 
@@ -34,7 +31,8 @@ main =
             id <- requestId ctx
             putStrLn $ "id received: " ++ id
 
-            partner <- requestPartner ctx
+            putStr "partner? "
+            partner <- getLine
             subscribe in_sock (pack partner)
 
             forever $ do
