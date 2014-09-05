@@ -1,11 +1,27 @@
 -- |
 -- Simple chat client
+-- 6000 id/partner request socket ("gid" - GetID, "gp""<partner_name>" - GetPartner)
+-- 5520 publishing socket
+-- 5510 subscribing socket
 -- |
 module Main where
 
 import System.ZMQ4
 import Control.Monad (forever)
 import Data.ByteString.Char8 (unpack, pack)
+
+
+requestId :: Context -> IO String
+requestId ctx =
+    withSocket ctx Req $ \id_sock -> do
+        connect id_sock "tcp://localhost:6000"
+        send id_sock [] (pack "gid")        
+        id <- receive id_sock
+        return $ unpack id
+
+requestPartner :: Context -> IO String
+requestPartner ctx = undefined
+
 
 main :: IO ()
 main = 
@@ -15,10 +31,15 @@ main =
             connect out_sock "tcp://localhost:5520"
             connect in_sock "tcp://localhost:5510" 
 
-            subscribe in_sock (pack "")
+            id <- requestId ctx
+            putStrLn $ "id received: " ++ id
+
+            --partner <- requestPartner ctx
+            --subscribe in_sock (pack partner)
 
             forever $ do
                 resp <- getLine
+                send out_sock [SendMore] (pack id)
                 send out_sock [] (pack resp)
                 msg <- receive in_sock
                 putStrLn (unpack msg)
