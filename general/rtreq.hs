@@ -4,7 +4,6 @@ import System.ZMQ4.Monadic
 import ZHelpers (setRandomIdentity)
 
 import Control.Concurrent (threadDelay, forkIO)
-import Control.Concurrent.MVar (withMVar, newMVar, MVar)
 import Control.Monad (replicateM_, unless)
 import Data.ByteString.Char8 (unpack, pack)
 import Data.Time.Clock (diffUTCTime, getCurrentTime, UTCTime)
@@ -14,10 +13,8 @@ import System.Random
 nbrWorkers :: Int
 nbrWorkers = 10
 
--- Although locks are an antipattern in ZMQ, we need a lock for the
--- stdout handle, otherwise we'll get jumbled text.
-workerThread :: MVar () -> IO ()
-workerThread lock =
+workerThread :: IO ()
+workerThread =
     runZMQ $ do
         worker <- socket Req
         setRandomIdentity worker
@@ -30,7 +27,7 @@ workerThread lock =
                     send sock [] (pack "ready")
                     workload <- receive sock
                     if unpack workload == "Fired!"
-                    then liftIO $ withMVar lock $ \_ -> printf "Completed: %d tasks\n" (val::Int)
+                    then liftIO $ printf "Completed: %d tasks\n" (val::Int)
                     else do
                         rand <- liftIO $ getStdRandom (randomR (500::Int, 5000))
                         liftIO $ threadDelay rand
@@ -42,11 +39,7 @@ main =
         client <- socket Router
         bind client "tcp://*:5671"
 
-        -- Needed to lock the stdout handle.
-        -- An alternative is to use NoBuffering stdin.
-        lock <- liftIO $ newMVar ()
-        
-        liftIO $ replicateM_ nbrWorkers (forkIO $ workerThread lock)
+        liftIO $ replicateM_ nbrWorkers (forkIO $ workerThread)
         
         start <- liftIO getCurrentTime
         clientTask client start
