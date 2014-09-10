@@ -14,7 +14,7 @@ import Text.Printf
 
 clientTask :: String -> ZMQ z ()
 clientTask ident = do
-    client <- socket Router
+    client <- socket Dealer
     setRandomIdentity client
     connect client "tcp://localhost:5570"
     forM_ [1..] $ \i -> do -- (long enough) forever
@@ -22,8 +22,9 @@ clientTask ident = do
         forM_ [0..100] $ \_ ->
             poll 10 -- timeout of 10 ms
                  [ Sock client [In] 
-                    $ Just $
-                        \_ -> receive client >>= liftIO . printf "Client %s has received back from worker its msg \"%s\"\n" ident . unpack ]
+                 $ Just $
+                      \_ -> receive client >>= 
+                            liftIO . printf "Client %s has received back from worker its msg \"%s\"\n" ident . unpack ]
         send client [] (pack $ unwords ["Client", ident, "sends request", show i])
 
 serverTask :: ZMQ z ()
@@ -43,13 +44,15 @@ serverWorker = do
     connect worker "inproc://backend"
     liftIO $ putStrLn "Worker Started"
     forever $
-        receive worker >>= \ident -> receive worker >>= \msg -> sendback worker msg ident
+        receive worker >>= 
+        \ident -> receive worker >>=
+        \msg -> sendback worker msg ident
     where
         -- send back to client 0 to 4 times max
         sendback worker msg ident = do
             resentNb <- liftIO $ randomRIO (0, 4)
-            timeoutMsec <- liftIO $ randomRIO (1, 1000)
             forM_ [0 :: Int .. resentNb] $ \_ -> do
+                timeoutMsec <- liftIO $ randomRIO (1, 1000)
                 liftIO $ threadDelay $ timeoutMsec * 1000
                 send worker [SendMore] ident
                 send worker [] msg
