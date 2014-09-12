@@ -58,6 +58,10 @@ main =
         then liftIO $ putStrLn "Syntax: protoLocalCloudFlow me {you}..."
         else do
             ((self, s_cloudfe), s_cloudbe) <- connectCloud args
+            (s_localfe, s_localbe) <- connectLocal self
+
+            liftIO $ putStrLn "Press Enter when all brokers are started" >> getChar
+
             return ()
 
 connectCloud :: [String] -> ZMQ z ((SockID, Socket z Router), Socket z Router)
@@ -77,3 +81,12 @@ connectCloud args = do
         connect s_cloudbe ("tcp://localhost:" ++ peer ++ cloud)
 
     return ((self, s_cloudfe), s_cloudbe) 
+
+connectLocal :: SockID -> ZMQ z (Socket z Router, Socket z Router)
+connectLocal self = do
+    s_localfe <- socket Router
+    bind s_localfe ("tcp://*:" ++ self ++ localfe)
+    s_localbe <- socket Router
+    bind s_localbe ("tcp://*:" ++ self ++ localbe)
+
+    return (s_localfe, s_localbe)
