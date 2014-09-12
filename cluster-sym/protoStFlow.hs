@@ -17,7 +17,7 @@ main =
         args <- liftIO $ getArgs
 
         if length args < 1
-        then liftIO $ putStrLn "Syntax: peering1 me {you}...\n"        
+        then liftIO $ putStrLn "Syntax: protoStFlow me {you}..."        
         else do
             ((self, statebe), statefe) <- connectBrokers args
             pollBrokers (self, statebe) statefe

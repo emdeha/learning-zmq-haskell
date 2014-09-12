@@ -4,8 +4,12 @@
 module Main where
 
 import System.ZMQ4.Monadic
+import System.Environment (getArgs)
 import Data.ByteString.Char8 (pack, unpack)
-import Control.Monad (forever)
+import Control.Monad (forever, forM_)
+
+
+type SockID = String
 
 
 nbrClients = 10 :: Int
@@ -14,8 +18,7 @@ workerReady = "\001"
 
 localfe = "1"
 localbe = "2"
-cloudfe = "3"
-cloudbe = "4"
+cloud = "3"
 
 
 -- Does simple request-reply dialog using a standard synchronous REQ socket
@@ -47,4 +50,30 @@ workerTask self =
 
 
 main :: IO ()
-main = putStrLn "SAD"
+main = 
+    runZMQ $ do
+        args <- liftIO $ getArgs
+
+        if length args < 1
+        then liftIO $ putStrLn "Syntax: protoLocalCloudFlow me {you}..."
+        else do
+            ((self, s_cloudfe), s_cloudbe) <- connectCloud args
+            return ()
+
+connectCloud :: [String] -> ZMQ z ((SockID, Socket z Router), Socket z Router)
+connectCloud args = do
+    let self = args !! 0
+    liftIO $ putStrLn $ "I: Preparing broker at " ++ self
+
+    s_cloudfe <- socket Router
+    setIdentity (restrict $ pack self) s_cloudfe
+    bind s_cloudfe ("tcp://*:" ++ self ++ cloud)
+
+    s_cloudbe <- socket Router
+    setIdentity (restrict $ pack self) s_cloudbe
+    forM_ [1..(length args - 1)] $ \i -> do
+        let peer = args !! i
+        liftIO $ putStrLn $ "II: Connecting to cloud frontend at " ++ peer
+        connect s_cloudbe ("tcp://localhost:" ++ peer ++ cloud)
+
+    return ((self, s_cloudfe), s_cloudbe) 
