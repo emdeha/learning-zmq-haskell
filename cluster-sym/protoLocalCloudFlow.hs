@@ -111,7 +111,7 @@ pollBackends s_localbe s_cloudbe s_cloudfe s_localfe workers brokerIDs = do
     (newWorkers, msg) <- getMessages s_localbe s_cloudbe eLoc eCloud workers
     routeMessage s_cloudfe s_localfe msg brokerIDs
 
-    pollBackends s_localbe s_cloudbe s_cloudfe s_localfe newWorkers
+    pollBackends s_localbe s_cloudbe s_cloudfe s_localfe newWorkers brokerIDs
 
   where 
         getMsecs [] = -1
@@ -136,4 +136,6 @@ getMessages s_localbe s_cloudbe eLoc eCloud workers
 routeMessage :: RouterSock z -> RouterSock z -> String -> [SockID] -> ZMQ z ()
 routeMessage s_cloudfe s_localfe msg brokerIDs = do
     forM_ [1..(length brokerIDs)] $ (\i ->
-        when (msg == (brokerIDs !! i)) $ send s_cloudfe [] (pack msg)
+        when (msg == (brokerIDs !! i)) $ 
+            send s_cloudfe [] (pack msg))
+    when (msg /= "") $ send s_localfe [] (pack msg)
