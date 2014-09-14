@@ -111,7 +111,9 @@ pollBackends s_localbe s_cloudbe s_cloudfe s_localfe workers brokerIDs = do
     (newWorkers, msg) <- getMessages s_localbe s_cloudbe eLoc eCloud workers
     routeMessage s_cloudfe s_localfe msg brokerIDs
 
-    pollBackends s_localbe s_cloudbe s_cloudfe s_localfe newWorkers brokerIDs
+    newWorkers' <- pollFrontends s_localbe s_cloudbe s_cloudfe s_localfe newWorkers brokerIDs
+
+    pollBackends s_localbe s_cloudbe s_cloudfe s_localfe newWorkers' brokerIDs
 
   where 
         getMsecs [] = -1
@@ -139,3 +141,24 @@ routeMessage s_cloudfe s_localfe msg brokerIDs = do
         when (msg == (brokerIDs !! i)) $ 
             send s_cloudfe [] (pack msg))
     when (msg /= "") $ send s_localfe [] (pack msg)
+
+pollFrontends :: RouterSock z -> RouterSock z -> RouterSock z -> RouterSock z -> [SockID] -> [SockID] -> ZMQ z ([SockID]) 
+pollFrontends _ _ _ _ [] _ = return ()
+pollFrontends s_localbe s_cloudbe s_cloudfe s_localfe workers = do
+    [eLoc, eCloud] = poll (-1) [ Sock s_localfe [In] Nothing
+                               , Sock s_cloudfe [In] Nothing ]
+
+    if In `elem` eCloud
+    then do
+        msg <- receive s_localfe
+        when (liftIO $ randomRIO (0::Int, 5) == 5) $
+            (peer <- liftIO $ randomRIO (2::Int, (length brokerIDs) - 2)
+            send (pack $ show peer) [SendMore] s_cloudbe
+            send msg [] s_cloudbe) 
+            pollFrontends s_localbe s_cloudbe s_cloudfe s_localfe workers brokerIDs
+    else if In `elem` eLoc 
+        then do
+            msg <- receive s_cloudfe
+            send (pack $ head workers) [SendMore] s_localbe
+            send msg [] s_localbe
+            pollFrontends s_localbe s_cloudbe s_cloudfe s_localfe (tail workers) brokerIDs
