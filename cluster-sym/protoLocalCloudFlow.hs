@@ -71,7 +71,7 @@ main =
             -- We handle the request-reply flow. We're using load-balancing to poll
             -- workers at all times, and clients only when there are one or more
             -- workers available.
-            pollBackends s_localbe s_cloudbe s_cloudfe s_localfe []
+            pollBackends s_localbe s_cloudbe s_cloudfe s_localfe [] args
 
 
 connectCloud :: [String] -> ZMQ z ((SockID, RouterSock z), RouterSock z)
@@ -102,14 +102,14 @@ connectLocal self = do
     return (s_localfe, s_localbe)
 
 
-pollBackends :: RouterSock z -> RouterSock z -> RouterSock z -> RouterSock z -> [SockID] -> ZMQ z ()
-pollBackends s_localbe s_cloudbe s_cloudfe s_localfe workers = do
+pollBackends :: RouterSock z -> RouterSock z -> RouterSock z -> RouterSock z -> [SockID] -> [SockID] -> ZMQ z ()
+pollBackends s_localbe s_cloudbe s_cloudfe s_localfe workers brokerIDs = do
     [eLoc, eCloud] <- poll (getMsecs workers)
                            [ Sock s_localbe [In] Nothing
                            , Sock s_cloudbe [In] Nothing ]
 
     (newWorkers, msg) <- getMessages s_localbe s_cloudbe eLoc eCloud workers
-    liftIO $ putStrLn $ "Message: " ++ msg
+    routeMessage s_cloudfe s_localfe msg brokerIDs
 
     pollBackends s_localbe s_cloudbe s_cloudfe s_localfe newWorkers
 
@@ -132,3 +132,8 @@ getMessages s_localbe s_cloudbe eLoc eCloud workers
         id <- receive s_cloudbe
         msg <- receive s_cloudbe
         return (workers, (unpack msg))
+
+routeMessage :: RouterSock z -> RouterSock z -> String -> [SockID] -> ZMQ z ()
+routeMessage s_cloudfe s_localfe msg brokerIDs = do
+    forM_ [1..(length brokerIDs)] $ (\i ->
+        when (msg == (brokerIDs !! i)) $ send s_cloudfe [] (pack msg)
