@@ -6,10 +6,11 @@ module Main where
 import System.ZMQ4.Monadic
 import System.Environment (getArgs)
 import Data.ByteString.Char8 (pack, unpack)
-import Control.Monad (forever, forM_)
+import Control.Monad (forever, forM_, when)
 
 
 type SockID = String
+type RouterSock z = Socket z Router
 
 
 nbrClients = 10 :: Int
@@ -62,9 +63,18 @@ main =
 
             liftIO $ putStrLn "Press Enter when all brokers are started" >> getChar
 
-            return ()
+            forM_ [1..nbrWorkers] $ \_ -> do
+                async $ liftIO $ workerTask self
+            forM_ [1..nbrClients] $ \_ -> do
+                async $ liftIO $ clientTask self
 
-connectCloud :: [String] -> ZMQ z ((SockID, Socket z Router), Socket z Router)
+            -- We handle the request-reply flow. We're using load-balancing to poll
+            -- workers at all times, and clients only when there are one or more
+            -- workers available.
+            pollBackends s_localbe s_cloudbe s_cloudfe s_localfe []
+
+
+connectCloud :: [String] -> ZMQ z ((SockID, RouterSock z), RouterSock z)
 connectCloud args = do
     let self = args !! 0
     liftIO $ putStrLn $ "I: Preparing broker at " ++ self
@@ -82,7 +92,7 @@ connectCloud args = do
 
     return ((self, s_cloudfe), s_cloudbe) 
 
-connectLocal :: SockID -> ZMQ z (Socket z Router, Socket z Router)
+connectLocal :: SockID -> ZMQ z (RouterSock z, RouterSock z)
 connectLocal self = do
     s_localfe <- socket Router
     bind s_localfe ("tcp://*:" ++ self ++ localfe)
@@ -90,3 +100,35 @@ connectLocal self = do
     bind s_localbe ("tcp://*:" ++ self ++ localbe)
 
     return (s_localfe, s_localbe)
+
+
+pollBackends :: RouterSock z -> RouterSock z -> RouterSock z -> RouterSock z -> [SockID] -> ZMQ z ()
+pollBackends s_localbe s_cloudbe s_cloudfe s_localfe workers = do
+    [eLoc, eCloud] <- poll (getMsecs workers)
+                           [ Sock s_localbe [In] Nothing
+                           , Sock s_cloudbe [In] Nothing ]
+
+    (newWorkers, msg) <- getMessages s_localbe s_cloudbe eLoc eCloud workers
+    liftIO $ putStrLn $ "Message: " ++ msg
+
+    pollBackends s_localbe s_cloudbe s_cloudfe s_localfe newWorkers
+
+  where 
+        getMsecs [] = -1
+        getMsecs _ = 1000
+
+
+getMessages :: RouterSock z -> RouterSock z -> [Event] -> [Event] -> [SockID] -> ZMQ z ([SockID], String)
+getMessages s_localbe s_cloudbe eLoc eCloud workers
+    | In `elem` eLoc = do
+        id <- receive s_localbe
+        msg <- receive s_localbe
+        let newWorkers = (unpack id):workers
+        if (unpack msg) == workerReady
+        then return (newWorkers, "")
+        else return (newWorkers, (unpack msg))
+
+    | In `elem` eCloud = do
+        id <- receive s_cloudbe
+        msg <- receive s_cloudbe
+        return (workers, (unpack msg))
