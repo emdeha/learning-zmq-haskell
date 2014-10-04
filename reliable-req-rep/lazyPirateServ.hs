@@ -1,3 +1,6 @@
+{--
+Lazy Pirate server in Haskell    
+--}
 module Main where
 
 import System.ZMQ4.Monadic
@@ -14,22 +17,28 @@ main =
         server <- socket Rep
         bind server "tcp://*:5555"
 
-        sendClients 0 server
+        sendClient 0 server
 
-sendClients :: Int -> Socket z Rep -> ZMQ z ()
-sendClients cycles server = do
+sendClient :: Int -> Socket z Rep -> ZMQ z ()
+sendClient cycles server = do
     req <- receive server
 
-    chance <- liftIO $ randomRIO (0::Int, 3)
-    when (cycles > 3 && chance == 0) $ do
-        simN <- liftIO $ randomRIO (0::Int, length simMap)
-        liftIO $ simMap !! simN
+    if (cycles > 3)
+    then do
+        chance <- liftIO $ randomRIO (0::Int, 3)
+        when (chance == 0) $ liftIO crash
+    else do
+        chance <- liftIO $ randomRIO (0::Int, 3)
+        when (chance == 0) $ liftIO overload
+        
+        --simN <- liftIO $ randomRIO (0::Int, length simMap)
+        --liftIO $ simMap !! simN
 
     liftIO $ putStrLn $ "I: normal request " ++ (unpack req)
     liftIO $ threadDelay $ 1 * 1000 * 1000
     send server [] req
 
-    sendClients (cycles+1) server
+    sendClient (cycles+1) server
 
 simMap :: [IO ()]
 simMap = [crash, overload]
