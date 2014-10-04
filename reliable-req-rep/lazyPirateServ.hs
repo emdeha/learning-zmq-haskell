@@ -28,6 +28,8 @@ sendClients cycles server = do
     liftIO $ threadDelay $ 1 * 1000 * 1000
     send server [] req
 
+    sendClients (cycles+1) server
+
 simMap :: [IO ()]
 simMap = [crash, overload]
 
