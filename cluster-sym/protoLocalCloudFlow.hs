@@ -4,13 +4,17 @@
 module Main where
 
 import System.ZMQ4.Monadic
+import Data.Restricted
 import ZHelpers
 
 import System.Environment (getArgs)
 import System.Random (randomRIO)
+import System.IO (hSetEncoding, stdout, utf8)
 import Data.ByteString.Char8 (pack, unpack)
+import Data.List (null)
 import Control.Monad (forever, forM_, when)
 import Control.Concurrent (threadDelay)
+import Control.Applicative ((<$>))
 
 
 type SockID = String
@@ -52,14 +56,13 @@ workerTask self =
         forever $ do
             msg <- receive worker
             liftIO $ putStrLn $ "Worker: " ++ (unpack msg)
-            send worker [SendMore] msg
-            send worker [SendMore] (pack "")
             send worker [] (pack "OK")
 
 
 main :: IO ()
 main = 
     runZMQ $ do
+        liftIO $ hSetEncoding stdout utf8
         args <- liftIO $ getArgs
 
         if length args < 1
@@ -68,25 +71,23 @@ main =
             ((self, s_cloudfe), s_cloudbe) <- connectCloud args
             (s_localfe, s_localbe) <- connectLocal self
 
-            --liftIO $ putStrLn "Press Enter when all brokers are started" >> getChar
+            liftIO $ putStrLn "Press Enter when all brokers are started" >> getChar
 
             forM_ [1..nbrWorkers] $ \_ -> do
                 async $ liftIO $ workerTask self
             forM_ [1..nbrClients] $ \_ -> do
                 async $ liftIO $ clientTask self
 
-            liftIO $ putStrLn "Started workers"
-
             -- We handle the request-reply flow. We're using load-balancing to poll
             -- workers at all times, and clients only when there are one or more
             -- workers available.
-            pollBackends s_localbe s_cloudbe s_cloudfe s_localfe [] args
+            lruQueue s_localbe s_cloudbe s_cloudfe s_localfe args
 
 
 connectCloud :: [String] -> ZMQ z ((SockID, RouterSock z), RouterSock z)
 connectCloud args = do
     let self = args !! 0 ++ cloud
-    liftIO $ putStrLn $ "I: Preparing broker at " ++ self
+    liftIO $ putStrLn $ "I: Preparing broker at `" ++ self ++ "`"
 
     s_cloudfe <- socket Router
     setIdentity (restrict $ pack self) s_cloudfe
@@ -111,76 +112,93 @@ connectLocal self = do
     return (s_localfe, s_localbe)
 
 
-pollBackends :: RouterSock z -> RouterSock z -> RouterSock z -> RouterSock z -> [SockID] -> [SockID] -> ZMQ z ()
-pollBackends s_localbe s_cloudbe s_cloudfe s_localfe workers brokerIDs = do
-    [eLoc, eCloud] <- poll (getMsecs workers)
-                           [ Sock s_localbe [In] Nothing
-                           , Sock s_cloudbe [In] Nothing ]
-    
-    (newWorkers, msg) <- getMessages s_localbe s_cloudbe eLoc eCloud workers
-    when (msg /= "") $ do
-        --liftIO $ putStrLn $ msg
-        routeMessage s_cloudfe s_localfe msg brokerIDs
+lruQueue :: RouterSock z -> RouterSock z -> RouterSock z -> RouterSock z -> [SockID] -> ZMQ z ()
+lruQueue s_localbe s_cloudbe s_cloudfe s_localfe brokerIDs = 
+    loop []
+  where loop workers = do
+            [eLoc, eCloud] <- poll (getMsecs workers)
+                                   [ Sock s_localbe [In] Nothing
+                                   , Sock s_cloudbe [In] Nothing ]
+            workers' <-
+                processBackend workers s_localbe s_cloudbe s_cloudfe s_localfe brokerIDs eLoc eCloud
+            if not $ null workers'
+            then do
+                workers'' <- processFrontend s_localbe s_cloudbe s_cloudfe s_localfe workers' brokerIDs
+                loop workers''
+            else loop workers'
 
-    newWorkers' <- pollFrontends s_localbe s_cloudbe s_cloudfe s_localfe newWorkers brokerIDs
-
-    pollBackends s_localbe s_cloudbe s_cloudfe s_localfe newWorkers' brokerIDs
-
-  where 
         getMsecs [] = -1
         getMsecs _ = 1000
 
 
+processBackend ::
+    [SockID] -> RouterSock z -> RouterSock z -> RouterSock z -> RouterSock z -> [SockID] -> [Event] -> [Event] -> ZMQ z ([SockID])
+processBackend workers s_localbe s_cloudbe s_cloudfe s_localfe brokerIDs eLoc eCloud = do
+    (workers', msg) <- getMessages s_localbe s_cloudbe eLoc eCloud workers
+    when (msg /= "") $
+        routeMessage s_cloudfe s_localfe msg brokerIDs
+
+    return (workers')
+
 getMessages :: RouterSock z -> RouterSock z -> [Event] -> [Event] -> [SockID] -> ZMQ z ([SockID], String)
 getMessages s_localbe s_cloudbe eLoc eCloud workers
     | In `elem` eLoc = do
-        id <- receive s_localbe
-        empty <- receive s_localbe
-        msg <- receive s_localbe
-        let newWorkers = (unpack id):workers
-        if (unpack msg) == workerReady
+        frame <- receiveMulti s_localbe
+        let frameStr = toStr frame
+            id = frameStr !! 0
+            msg = frameStr !! 2
+            newWorkers = id:workers
+        if msg == workerReady
         then return (newWorkers, "")
-        else return (newWorkers, (unpack msg))
+        else return (newWorkers, msg)
 
     | In `elem` eCloud = do
-        id <- receive s_cloudbe
-        msg <- receive s_cloudbe
-        return (workers, (unpack msg))
+        liftIO $ putStrLn "has cloud"
+        frame <- receiveMulti s_cloudbe
+        let frameStr = toStr frame
+            msg = frameStr !! 2
+        return (workers, msg)
 
     | otherwise = return (workers, "")
+  where toStr bs = unpack <$> bs
 
 routeMessage :: RouterSock z -> RouterSock z -> String -> [SockID] -> ZMQ z ()
 routeMessage s_cloudfe s_localfe msg brokerIDs = do
+    let frame = words msg
+        info = frame !! 0
+        --info = frame !! 1
     forM_ [1..(length brokerIDs - 1)] $ (\i -> do
-        liftIO $ putStrLn $ "broker id: " ++ (brokerIDs !! i) ++ " msg: " ++ msg
-        when (msg == (brokerIDs !! i)) $
-            send s_cloudfe [] (pack msg))
-    when (msg /= "") $ send s_localfe [] (pack msg)
+        when (info /= "" && info == (brokerIDs !! i)) $ do
+            liftIO $ putStrLn "sending to brokers"
+            send s_cloudfe [] (pack info))
+    when (msg /= "") $ do
+        send s_localfe [] (pack info)
 
-pollFrontends :: RouterSock z -> RouterSock z -> RouterSock z -> RouterSock z -> [SockID] -> [SockID] -> ZMQ z ([SockID]) 
-pollFrontends _ _ _ _ [] _ = return ([])
-pollFrontends s_localbe s_cloudbe s_cloudfe s_localfe workers brokerIDs = do
+
+processFrontend :: RouterSock z -> RouterSock z -> RouterSock z -> RouterSock z -> [SockID] -> [SockID] -> ZMQ z ([SockID]) 
+processFrontend _ _ _ _ [] _ = return ([])
+processFrontend s_localbe s_cloudbe s_cloudfe s_localfe workers brokerIDs = do
     [eLoc, eCloud] <- poll 0 [ Sock s_localfe [In] Nothing
                              , Sock s_cloudfe [In] Nothing ]
 
-    liftIO $ putStrLn $ "polling frontends: " ++ (show $ length workers)
-
     if In `elem` eCloud
     then do
-        msg <- receive s_cloudfe
+        msg <- receiveMulti s_cloudfe
+        liftIO $ putStrLn $ "received from s_cloudfe " ++ (unwords $ unpack <$> msg)
         send s_localbe [SendMore] (pack $ head workers)
         send s_localbe [SendMore] (pack "")
-        send s_localbe [] msg 
-        pollFrontends s_localbe s_cloudbe s_cloudfe s_localfe (tail workers) brokerIDs
+        send s_localbe [] $ msg !! 0
+        processFrontend s_localbe s_cloudbe s_cloudfe s_localfe (tail workers) brokerIDs
     else if In `elem` eLoc 
         then do
             msg <- receive s_localfe
             chance <- liftIO $ randomRIO (0::Int, 5)
-            when (chance == (0::Int)) $ (do
+            when (chance == (0::Int)) (do
                 peerIdx <- liftIO $ randomRIO (1::Int, (length brokerIDs) - 1)
                 let peer = brokerIDs !! peerIdx ++ cloud
                 send s_cloudbe [SendMore] (pack peer)
                 send s_cloudbe [SendMore] (pack "")
-                send s_cloudbe [] msg)
-            pollFrontends s_localbe s_cloudbe s_cloudfe s_localfe workers brokerIDs
+                send s_cloudbe [] msg
+                )
+            processFrontend s_localbe s_cloudbe s_cloudfe s_localfe workers brokerIDs
         else return (workers)
