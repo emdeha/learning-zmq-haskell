@@ -30,18 +30,12 @@ sendClient cycles server = do
     else do
         chance <- liftIO $ randomRIO (0::Int, 3)
         when (chance == 0) $ liftIO overload
-        
-        --simN <- liftIO $ randomRIO (0::Int, length simMap)
-        --liftIO $ simMap !! simN
 
     liftIO $ putStrLn $ "I: normal request " ++ (unpack req)
     liftIO $ threadDelay $ 1 * 1000 * 1000
     send server [] req
 
     sendClient (cycles+1) server
-
-simMap :: [IO ()]
-simMap = [crash, overload]
 
 crash = do
     putStrLn "I: Simulating a crash"
