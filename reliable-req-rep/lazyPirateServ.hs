@@ -2,6 +2,7 @@ module Main where
 
 import System.ZMQ4.Monadic
 import System.Random (randomRIO)
+import System.Exit (exitSuccess)
 import Control.Monad (forever, when)
 import Control.Concurrent (threadDelay)
 import Data.ByteString.Char8 (pack, unpack)
@@ -33,7 +34,9 @@ sendClients cycles server = do
 simMap :: [IO ()]
 simMap = [crash, overload]
 
-crash = putStrLn "I: Simulating a crash"
+crash = do
+    putStrLn "I: Simulating a crash"
+    exitSuccess
 overload = do 
     putStrLn "I: Simulating CPU overload"
     threadDelay $ 2 * 1000 * 1000
