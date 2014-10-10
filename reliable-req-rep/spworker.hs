@@ -10,7 +10,8 @@ import System.Random (randomRIO)
 import System.Exit (exitSuccess)
 import Control.Monad (when)
 import Control.Concurrent (threadDelay)
-import Data.ByteString.Char8 (pack, unpack)
+import Control.Applicative ((<$>))    
+import Data.ByteString.Char8 (pack, unpack, empty)
 
 
 workerReady = "\001"
@@ -24,13 +25,16 @@ main =
 
         id <- identity worker
         liftIO $ putStrLn $ "I: Worker ready " ++ unpack id
+        send worker [SendMore] empty
+        send worker [SendMore] empty
         send worker [] (pack workerReady)
 
         sendRequests worker 1
 
 sendRequests :: Socket z Req -> Int -> ZMQ z ()
 sendRequests worker cycles = do
-    msg <- receive worker
+    clID <- receive worker
+    msg <- (receive worker >> receive worker)
     chance <- liftIO $ randomRIO (0::Int, 5)
     id <- identity worker
     if cycles > 3 && chance == 0
@@ -43,6 +47,10 @@ sendRequests worker cycles = do
             liftIO $ putStrLn $ "I: Simulating overload " ++ unpack id
             liftIO $ threadDelay $ 3 * 1000 * 1000
     
-    liftIO $ putStrLn $ "I: Normal reply " ++ unpack id 
+    liftIO $ putStrLn $ "I: Normal reply " ++ unpack id
     liftIO $ threadDelay $ 1 * 1000 * 1000
+    send worker [SendMore] clID
+    send worker [SendMore] (pack "")
     send worker [] msg
+
+    sendRequests worker (cycles+1)
