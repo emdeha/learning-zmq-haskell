@@ -46,7 +46,7 @@ pollPeers frontend backend workers = do
                     msg <- (receive backend >> receive backend)
 
                     when ((unpack msg) /= workerReady) $ do
-                        liftIO $ putStrLn $ "I: sending backend - " ++ (unpack msg)
+                        liftIO $ putStrLn $ "I: sending frontend - " ++ (unpack msg)
                         send frontend [SendMore] id
                         send frontend [SendMore] empty
                         send frontend [] msg
