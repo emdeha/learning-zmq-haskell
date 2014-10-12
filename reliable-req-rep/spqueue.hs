@@ -9,7 +9,6 @@ import Control.Concurrent (threadDelay)
 import Control.Applicative ((<$>))
 import Control.Monad (when)
 import Data.ByteString.Char8 (pack, unpack, empty)
-import Data.List (intercalate)
 
 
 type SockID = String
