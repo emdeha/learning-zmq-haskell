@@ -5,6 +5,7 @@ Uses heartbeating to detect crashed or blocked workers.
 module Main where
 
 import System.ZMQ4.Monadic
+import ZHelpers
 
 import Control.Monad (when, forM_)
 import Data.ByteString.Char8 (pack, unpack, empty)
@@ -34,19 +35,8 @@ main =
         backend <- socket Router
         bind backend "tcp://*:5556"
 
-        heartbeat_at <- liftIO $ nextHeartbeatTime_ms
+        heartbeat_at <- liftIO $ nextHeartbeatTime_ms heartbeatInterval_ms
         pollPeers frontend backend [] heartbeat_at
-
-currentTime_ms :: IO Integer
-currentTime_ms = do
-    currTime <- getCurrentTime
-    let time_secs = todSec . localTimeOfDay . utcToLocalTime utc $ currTime
-    return $ (resolution $ time_secs) * 1000
-
-nextHeartbeatTime_ms :: IO Integer
-nextHeartbeatTime_ms = do
-    currTime <- currentTime_ms
-    return $ currTime + heartbeatInterval_ms
 
 createWorker :: SockID -> IO Worker
 createWorker id = do
@@ -118,7 +108,7 @@ pollPeers frontend backend workers heartbeat_at = do
                     send backend [SendMore] (pack $ sockID worker)
                     send backend [SendMore] empty
                     send backend [] (pack pppHeartbeat))
-                liftIO nextHeartbeatTime_ms
+                liftIO $ nextHeartbeatTime_ms heartbeatInterval_ms
             else return heartbeat_at
 
         purge :: [Worker] -> ZMQ z ([Worker])
