@@ -4,13 +4,14 @@ import System.ZMQ4.Monadic
 
 import Numeric (showHex)
 
-import Data.Time.Clock
-import Data.Time.LocalTime
+import Control.Applicative ((<$>))
+import System.Random
+import System.Locale
+import Data.Time
 import Data.Fixed
 import Data.ByteString.Char8 (pack, unpack)
 import Data.Char (ord)
 import Text.Printf (printf)
-import System.Random
 import qualified Data.ByteString as B
 
 
@@ -50,12 +51,12 @@ genUniqueId = do
 prettyPrint :: B.ByteString -> String
 prettyPrint = concatMap (`showHex` "") . B.unpack
 
--- Returns the current *local* time in milliseconds
+-- Returns the current UNIX time in milliseconds
 currentTime_ms :: IO Integer
 currentTime_ms = do
-    currTime <- getCurrentTime
-    let time_secs = todSec . localTimeOfDay . utcToLocalTime utc $ currTime
-    return $ (resolution $ time_secs) * 1000
+    time_secs <- (read <$> formatTime defaultTimeLocale "%s" <$> getCurrentTime) :: IO Integer
+    putStrLn $ "time : " ++ show time_secs
+    return $ time_secs * 1000
 
 nextHeartbeatTime_ms :: Integer -> IO Integer
 nextHeartbeatTime_ms heartbeatInterval_ms = do
