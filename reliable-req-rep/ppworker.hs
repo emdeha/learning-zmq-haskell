@@ -9,6 +9,7 @@ import ZHelpers
 
 import System.Random (randomRIO)
 import System.Exit (exitSuccess)
+import System.IO (hSetEncoding, stdout, utf8)
 import Control.Monad (when)
 import Control.Concurrent (threadDelay)
 import Data.ByteString.Char8 (pack, unpack, empty)
@@ -39,6 +40,7 @@ main =
         worker <- createWorkerSocket
         heartbeatAt <- liftIO $ nextHeartbeatTime_ms heartbeatInterval_ms
         
+        liftIO $ hSetEncoding stdout utf8
         pollWorker worker heartbeatAt heartbeatLiveness reconnectIntervalInit 0
 
 pollWorker :: Socket z Dealer -> Integer -> Integer -> Integer -> Int -> ZMQ z ()
@@ -49,11 +51,14 @@ pollWorker worker heartbeat liveness reconnectInterval cycles = do
     then do
         -- By the first part of the message we'll determine if we had a heartbeat
         -- or a request.
-        rep <- receive worker
+        frame <- receiveMulti worker
+        liftIO $ mapM_ (putStrLn . unpack) frame
+        let msg = frame !! 1
+        liftIO $ putStrLn $ "msg: " ++ (unpack msg)
 
         -- TODO: Add check for valid message
         --       Not all messages which have more parts are valid.
-        if rep /= pppHeartbeat
+        if msg /= pppHeartbeat
         then do
             chance <- liftIO $ randomRIO (0::Int, 5)
             if cycles > 3 && chance == 0
@@ -66,12 +71,13 @@ pollWorker worker heartbeat liveness reconnectInterval cycles = do
                     liftIO $ putStrLn "I: Simulating CPU overload"
                     liftIO $ threadDelay $ 3 * 1000 * 1000
 
-            clID <- (receive worker >> receive worker)
-            msg <- (receive worker >> receive worker)
+            --clID <- (receive worker >> receive worker)
+            --msg <- (receive worker >> receive worker)
+            let info = frame !! 3
             liftIO $ putStrLn "I: Normal reply" 
-            send worker [SendMore] clID
+            send worker [SendMore] msg
             send worker [SendMore] empty
-            send worker [] msg
+            send worker [] info
             liftIO $ threadDelay $ 1 * 1000 * 1000
 
             pollWorker worker heartbeat heartbeatLiveness reconnectIntervalInit (cycles+1)
@@ -80,7 +86,7 @@ pollWorker worker heartbeat liveness reconnectInterval cycles = do
         when (liveness == 0) $ do
             liftIO $ putStrLn "W: heartbeat failure, can't reach queue"
             liftIO $ putStrLn $ "W: reconnecting in " ++ (show reconnectInterval) ++ " msec..."
-            liftIO $ threadDelay $ (fromInteger reconnectInterval) * 1000 * 1000
+            liftIO $ threadDelay $ (fromInteger reconnectInterval) * 1000
 
             worker' <- createWorkerSocket
             if (reconnectInterval < reconnectIntervalLimit)

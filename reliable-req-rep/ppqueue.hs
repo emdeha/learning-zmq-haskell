@@ -8,10 +8,10 @@ import System.ZMQ4.Monadic
 import ZHelpers
 
 import Control.Monad (when, forM_)
+import Control.Applicative ((<$>))
+import System.IO (hSetEncoding, stdout, utf8)
 import Data.ByteString.Char8 (pack, unpack, empty)
-import Data.Time.Clock
-import Data.Time.LocalTime
-import Data.Fixed
+import qualified Data.List.NonEmpty as N
 
 
 type SockID = String
@@ -35,6 +35,8 @@ main =
         backend <- socket Router
         bind backend "tcp://*:5556"
 
+        liftIO $ hSetEncoding stdout utf8
+
         heartbeat_at <- liftIO $ nextHeartbeatTime_ms heartbeatInterval_ms
         pollPeers frontend backend [] heartbeat_at
 
@@ -52,7 +54,7 @@ pollPeers frontend backend workers heartbeat_at = do
     workers' <- getBackend backend frontend evts workers
     workers'' <- getFrontend frontend backend evts workers'
 
-    newHeartbeatAt <- heartbeat backend workers heartbeat_at
+    newHeartbeatAt <- heartbeat backend workers'' heartbeat_at
 
     workersPurged <- purge workers''
 
@@ -66,17 +68,23 @@ pollPeers frontend backend workers heartbeat_at = do
         getBackend backend frontend evts workers =
             if (In `elem` (evts !! 0))
             then do
-                wkrID <- receive backend
-                id <- (receive backend >> receive backend)
-                msg <- (receive backend >> receive backend)
+                frame <- receiveMulti backend
+                let wkrID = frame !! 0
+                    msg = frame !! 1
+                liftIO $ putStrLn $ "msg: " ++ (unpack msg)
 
-                if ((length . unpack $ msg) == 1)
-                then when (unpack msg /= pppReady && unpack msg /= pppHeartbeat) $ do
-                    liftIO $ putStrLn $ "E: Invalid message from worker " ++ unpack msg
+                if ((length frame) == 2)
+                then when (unpack msg `notElem` [pppReady, pppHeartbeat]) $ do
+                    liftIO $ putStrLn $ "E: Invalid message from worker " ++ (unpack msg)
                 else do
+                    liftIO $ putStrLn "not ppq protocol message"
+                    liftIO $ mapM_ (putStrLn . unpack) frame
+                    let id = frame !! 1
+                        msg = frame !! 3
                     send frontend [SendMore] id
                     send frontend [SendMore] empty
                     send frontend [] msg
+                    liftIO $ putStrLn $ "ID: '" ++ (unpack id) ++ "' msg: '" ++ (unpack msg) ++ "'"
 
                 newWorker <- liftIO $ createWorker $ unpack wkrID
                 return $ workers ++ [newWorker]
@@ -87,15 +95,23 @@ pollPeers frontend backend workers heartbeat_at = do
         getFrontend frontend backend evts workers =
             if (length evts > 1 && In `elem` (evts !! 1))
             then do
-                id <- receive frontend
-                msg <- (receive frontend >> receive frontend)
+                --liftIO $ putStrLn "frontend"
+                --id <- receive frontend
+                --msg <- (receive frontend >> receive frontend)
+                --liftIO $ putStrLn "end frontend"
+                --liftIO $ putStrLn $ "ID: '" ++ (unpack id) ++ "' msg: '" ++ (unpack msg) ++ "'"
+                frame <- receiveMulti frontend
+                liftIO $ mapM_ (putStrLn . unpack) frame
                 
                 let wkrID = sockID . head $ workers
+                --send backend [SendMore] (pack wkrID)
+                --send backend [SendMore] empty
+                --send backend [SendMore] id
+                --send backend [SendMore] empty
+                --send backend [] msg
                 send backend [SendMore] (pack wkrID)
                 send backend [SendMore] empty
-                send backend [SendMore] id
-                send backend [SendMore] empty
-                send backend [] msg
+                sendMulti backend (N.fromList frame)
                 return $ tail workers
             else return workers
         
@@ -107,11 +123,12 @@ pollPeers frontend backend workers heartbeat_at = do
                 forM_ workers (\worker -> do
                     send backend [SendMore] (pack $ sockID worker)
                     send backend [SendMore] empty
-                    send backend [] (pack pppHeartbeat))
+                    send backend [] (pack pppHeartbeat)
+                    liftIO $ putStrLn $ "sending heartbeat to '" ++ (sockID worker) ++ "'")
                 liftIO $ nextHeartbeatTime_ms heartbeatInterval_ms
             else return heartbeat_at
 
         purge :: [Worker] -> ZMQ z ([Worker])
         purge workers = do
             currTime <- liftIO currentTime_ms
-            return $ filter (\wkr -> expiry wkr < currTime) workers
+            return $ filter (\wkr -> expiry wkr > currTime) workers

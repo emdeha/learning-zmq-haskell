@@ -55,7 +55,6 @@ prettyPrint = concatMap (`showHex` "") . B.unpack
 currentTime_ms :: IO Integer
 currentTime_ms = do
     time_secs <- (read <$> formatTime defaultTimeLocale "%s" <$> getCurrentTime) :: IO Integer
-    putStrLn $ "time : " ++ show time_secs
     return $ time_secs * 1000
 
 nextHeartbeatTime_ms :: Integer -> IO Integer

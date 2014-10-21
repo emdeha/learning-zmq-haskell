@@ -1,5 +1,5 @@
 start cmd.exe /k ppqueue
-for %%i in (1,2,3,4) do (
+for %%i in (1,2) do (
     start cmd.exe /k ppworker
     sleep 1
 )
