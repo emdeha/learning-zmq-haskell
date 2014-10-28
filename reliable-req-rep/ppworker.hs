@@ -29,7 +29,7 @@ createWorkerSocket = do
     worker <- socket Dealer
     connect worker "tcp://localhost:5556"
     
-    liftIO $ putStrLn "I: worker ready\n"
+    liftIO $ putStrLn "I: worker ready"
     send worker [] pppReady
 
     return worker
@@ -49,16 +49,9 @@ pollWorker worker heartbeat liveness reconnectInterval cycles = do
 
     if In `elem` evts
     then do
-        -- By the first part of the message we'll determine if we had a heartbeat
-        -- or a request.
         frame <- receiveMulti worker
-        liftIO $ mapM_ (putStrLn . unpack) frame
-        let msg = frame !! 1
-        liftIO $ putStrLn $ "msg: " ++ (unpack msg)
 
-        -- TODO: Add check for valid message
-        --       Not all messages which have more parts are valid.
-        if msg /= pppHeartbeat
+        if length frame == 4 -- Handle normal message
         then do
             chance <- liftIO $ randomRIO (0::Int, 5)
             if cycles > 3 && chance == 0
@@ -71,19 +64,28 @@ pollWorker worker heartbeat liveness reconnectInterval cycles = do
                     liftIO $ putStrLn "I: Simulating CPU overload"
                     liftIO $ threadDelay $ 3 * 1000 * 1000
 
-            --clID <- (receive worker >> receive worker)
-            --msg <- (receive worker >> receive worker)
-            let info = frame !! 3
+            let id = frame !! 1
+                info = frame !! 3
             liftIO $ putStrLn "I: Normal reply" 
-            send worker [SendMore] msg
+            send worker [SendMore] id
             send worker [SendMore] empty
             send worker [] info
             liftIO $ threadDelay $ 1 * 1000 * 1000
 
             pollWorker worker heartbeat heartbeatLiveness reconnectIntervalInit (cycles+1)
-        else pollWorker worker heartbeat heartbeatLiveness reconnectIntervalInit cycles
+        else if length frame == 2 -- Handle heartbeat or eventual invalid message
+            then do
+                let msg = frame !! 1
+                if msg == pppHeartbeat
+                then pollWorker worker heartbeat heartbeatLiveness reconnectIntervalInit cycles
+                else do
+                    liftIO $ putStrLn "E: invalid message" 
+                    pollWorker worker heartbeat liveness reconnectIntervalInit cycles
+            else do
+                liftIO $ putStrLn "E: invalid message"
+                pollWorker worker heartbeat liveness reconnectIntervalInit cycles
     else do
-        when (liveness == 0) $ do
+        when (liveness == 0) $ do -- Try to reconnect
             liftIO $ putStrLn "W: heartbeat failure, can't reach queue"
             liftIO $ putStrLn $ "W: reconnecting in " ++ (show reconnectInterval) ++ " msec..."
             liftIO $ threadDelay $ (fromInteger reconnectInterval) * 1000
@@ -93,7 +95,7 @@ pollWorker worker heartbeat liveness reconnectInterval cycles = do
             then pollWorker worker' heartbeat heartbeatLiveness (reconnectInterval * 2) cycles
             else pollWorker worker' heartbeat heartbeatLiveness reconnectInterval cycles
 
-        currTime <- liftIO $ currentTime_ms
+        currTime <- liftIO $ currentTime_ms -- Send heartbeat
         when (currTime > heartbeat) $ do
             liftIO $ putStrLn "I: worker heartbeat"
             send worker [] pppHeartbeat

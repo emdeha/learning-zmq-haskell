@@ -8,7 +8,6 @@ import Control.Applicative ((<$>))
 import System.Random
 import System.Locale
 import Data.Time
-import Data.Fixed
 import Data.ByteString.Char8 (pack, unpack)
 import Data.Char (ord)
 import Text.Printf (printf)
