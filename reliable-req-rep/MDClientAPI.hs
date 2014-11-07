@@ -2,9 +2,7 @@
     Majordomo Client API
 -}
 module MDClientAPI
-    (   mdConnectToBroker
-    ,   mdInit
-    ,   mdDestroy
+    (   withMDCli
     ,   mdSetTimeout
     ,   mdSetRetries
     ,   mdSend
@@ -14,6 +12,8 @@ module MDClientAPI
 import System.ZMQ4
 
 import Control.Monad (when, liftM)
+import Control.Applicative ((<$>))
+import Control.Exception (bracket)
 import Data.ByteString.Char8 (pack, unpack, empty, ByteString(..))
 import qualified Data.List.NonEmpty as N
 
@@ -23,11 +23,18 @@ mdpcClient = "MDPCxy"
 data ClientAPI = ClientAPI {
       ctx :: Context
     , broker :: String
-    , client :: Maybe (Socket Req)
+    , client :: Socket Req
     , verbose :: Bool
     , timeout :: Integer
     , retries :: Int
     }
+
+
+withMDCli :: String -> Bool -> (ClientAPI -> IO a) -> IO a
+withMDCli broker verbose act =
+    bracket (mdInit broker verbose)
+            (mdDestroy)
+            act
 
 
 {-
@@ -36,12 +43,12 @@ data ClientAPI = ClientAPI {
 -}
 mdConnectToBroker :: ClientAPI -> IO ClientAPI
 mdConnectToBroker api = do
-    case client api of Just cl -> close cl
-    client <- socket (ctx api) Req
-    connect client (broker api)
+    close $ client api
+    reconnectedClient <- socket (ctx api) Req
+    connect reconnectedClient (broker api)
     when (verbose api) $ do
         putStrLn $ "I: connecting to broker at " ++ (broker api)
-    return api { client = Just client }
+    return api { client = reconnectedClient }
 
 {-
     @pre valid broker ip address with port
@@ -50,8 +57,9 @@ mdConnectToBroker api = do
 mdInit :: String -> Bool -> IO ClientAPI
 mdInit broker verbose = do
     ctx <- context
+    client <- socket ctx Req
     let newAPI = ClientAPI { ctx = ctx
-                           , client = Nothing
+                           , client = client
                            , broker = broker
                            , verbose = verbose
                            , timeout = 2500
@@ -63,11 +71,10 @@ mdInit broker verbose = do
     @pre initialized context
     @post an API _without a created context_ and _closed sockets_
 -}
-mdDestroy :: ClientAPI -> IO ClientAPI
+mdDestroy :: ClientAPI -> IO ()
 mdDestroy api = do
-    case client api of Just cl -> close cl
+    close (client api)
     shutdown (ctx api)
-    return api
 
 {-
     @pre initialized API
@@ -99,9 +106,9 @@ mdSend api service request = do
         mapM_ (putStrLn . unpack) wrappedRequest 
    
     trySend (client api) (retries api) wrappedRequest
-  where trySend :: Maybe (Socket Req) -> Int -> [ByteString] -> IO [ByteString]
-        trySend Nothing _ _ = error "E: Socket not connected"
-        trySend (Just clientSock) retries wrappedRequest = do
+  where trySend :: Socket Req -> Int -> [ByteString] -> IO [ByteString]
+        trySend clientSock retries wrappedRequest = do
+            putStrLn $ "msg " ++ (unwords $ unpack <$> wrappedRequest)
             sendMulti clientSock (N.fromList wrappedRequest)
 
             evts <- poll (fromInteger $ timeout api) [Sock clientSock [In] Nothing] 
@@ -130,11 +137,11 @@ mdSend api service request = do
 
                 return $ drop 2 msg
             else
-                if retries < 0
+                if retries > 0
                 then do
                     when (verbose api) $ putStrLn "W: No reply, reconnecting..."
                     mdConnectToBroker api
-                    trySend (Just clientSock) (retries-1) wrappedRequest
+                    trySend clientSock (retries-1) wrappedRequest
                 else do 
                     when (verbose api) $ putStrLn "W: Permanent error, abandoning"
                     error ""
