@@ -93,7 +93,7 @@ mdSetRetries api newRetries = return api { retries = newRetries }
 {-
     @brief Sends a request and retries until it can
     @pre initialized API
-    @post unaltered API
+    @post API with a possibly restarted socket
 -}
 mdSend :: ClientAPI -> String -> [ByteString] -> IO [ByteString]
 mdSend api service request = do
@@ -105,9 +105,9 @@ mdSend api service request = do
         putStrLn $ "I: Send request to " ++ service ++ " service:"
         mapM_ (putStrLn . unpack) wrappedRequest 
    
-    trySend (client api) (retries api) wrappedRequest
-  where trySend :: Socket Req -> Int -> [ByteString] -> IO [ByteString]
-        trySend clientSock retries wrappedRequest = do
+    trySend (client api) wrappedRequest
+  where trySend :: Socket Req -> [ByteString] -> IO [ByteString]
+        trySend clientSock wrappedRequest = do
             putStrLn $ "msg " ++ (unwords $ unpack <$> wrappedRequest)
             sendMulti clientSock (N.fromList wrappedRequest)
 
@@ -137,11 +137,11 @@ mdSend api service request = do
 
                 return $ drop 2 msg
             else
-                if retries > 0
+                if retries api > 0
                 then do
                     when (verbose api) $ putStrLn "W: No reply, reconnecting..."
-                    mdConnectToBroker api
-                    trySend clientSock (retries-1) wrappedRequest
+                    newAPI <- mdConnectToBroker api
+                    mdSend (newAPI { retries = ((retries api)-1) }) service (drop 2 wrappedRequest)
                 else do 
                     when (verbose api) $ putStrLn "W: Permanent error, abandoning"
                     error ""
