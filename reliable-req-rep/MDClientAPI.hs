@@ -17,7 +17,7 @@ import Control.Exception (bracket)
 import Data.ByteString.Char8 (pack, unpack, empty, ByteString(..))
 import qualified Data.List.NonEmpty as N
 
-mdpcClient = "MDPCxy" 
+mdpcClient = "MDPC01" 
 
 
 data ClientAPI = ClientAPI {

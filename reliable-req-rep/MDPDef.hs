@@ -1,3 +1,6 @@
+{-
+    Majordomo protocol constants
+-}
 module MDPDef (
         mdpcClient
     ,   mdpwWorker

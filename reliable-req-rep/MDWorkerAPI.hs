@@ -10,10 +10,13 @@ module MDWorkerAPI
 
 
 import System.ZMQ4
+import MDPDef
 
 import Control.Exception (bracket)
+import Control.Monad.State
 import Data.ByteString.Char8 (pack, unpack, empty, ByteString(..))
 import qualified Data.List.NonEmpty as N
+import Data.Maybe
 
 
 data WorkerAPI = WorkerAPI {
@@ -33,7 +36,23 @@ data WorkerAPI = WorkerAPI {
     , reply_to :: [ByteString]
     }
 
+heartbeatLiveness :: Int
+heartbeatLiveness = 3
+
+
 withMDWorker = undefined
+
+s_mdwkrSendToBroker :: WorkerAPI -> ByteString -> Maybe ByteString -> Maybe [ByteString] -> IO ()
+s_mdwkrSendToBroker api command option msg = do
+    let args = [option, Just command, Just mdpwWorker, Just empty]
+        msg' = fromMaybe [] msg
+        wrappedMessage = msg' ++ catMaybes args
+    when (verbose api) $ do
+        let strCmd = mdpsCommands !! (read . unpack $ command)
+        putStrLn $ "I: Sending " ++ unpack strCmd ++ " to broker"
+        mapM_ (putStrLn . unpack) wrappedMessage
+
+    sendMulti (worker api) (N.fromList wrappedMessage)
 
 mdwkrExchange = undefined
 
