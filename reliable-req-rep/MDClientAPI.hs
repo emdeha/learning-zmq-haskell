@@ -100,7 +100,7 @@ mdSend api service request = do
     -- Protocol frames
     -- Frame 1: "MDPCxy" (six bytes, MDP/Client x.y)
     -- Frame 2: Service name (printable string)
-    let wrappedRequest = [pack mdpcClient, pack service] ++ request
+    let wrappedRequest = [pack mdpcClient, pack service, request]
     when (verbose api) $ do
         putStrLn $ "I: Send request to " ++ service ++ " service:"
         mapM_ (putStrLn . unpack) wrappedRequest 
@@ -108,7 +108,6 @@ mdSend api service request = do
     trySend (client api) wrappedRequest
   where trySend :: Socket Req -> [ByteString] -> IO [ByteString]
         trySend clientSock wrappedRequest = do
-            putStrLn $ "msg " ++ (unwords $ unpack <$> wrappedRequest)
             sendMulti clientSock (N.fromList wrappedRequest)
 
             evts <- poll (fromInteger $ timeout api) [Sock clientSock [In] Nothing] 
@@ -145,3 +144,4 @@ mdSend api service request = do
                 else do 
                     when (verbose api) $ putStrLn "W: Permanent error, abandoning"
                     error ""
+            putStrLn $ "msg " ++ (unwords $ unpack <$> wrappedRequest)
