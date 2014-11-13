@@ -57,7 +57,7 @@ mdConnectToBroker api = do
 mdInit :: String -> Bool -> IO ClientAPI
 mdInit broker verbose = do
     ctx <- context
-    client <- socket ctx Req
+    client <- socket ctx Req -- TODO: mdConnectToBroker creates the socket again!
     let newAPI = ClientAPI { ctx = ctx
                            , client = client
                            , broker = broker

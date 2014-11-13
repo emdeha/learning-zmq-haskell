@@ -24,7 +24,7 @@ data WorkerAPI = WorkerAPI {
       ctx :: Context
     , broker :: String
     , service :: String
-    , worker :: Socket Req
+    , worker :: Socket Dealer
     , verbose :: Bool
 
     -- Heartbeats
@@ -65,10 +65,28 @@ s_mdwkrConnectToBroker api = do
     s_mdwkrSendToBroker api mdpwReady (Just . pack $ service api) Nothing
 
     nextHeartbeat <- nextHeartbeatTime_ms $ heartbeatDelay_ms api
-    return api { 
-                 liveness = heartbeatLiveness, 
-                 heartbeat_at = nextHeartbeat
+    return api { worker = reconnectedWorker
+               , liveness = heartbeatLiveness 
+               , heartbeat_at = nextHeartbeat
                }
+
+mdwkrInit :: String -> String -> Bool -> IO WorkerAPI
+mdwkrInit broker service verbose = do
+    ctx <- context
+    worker <- socket ctx Dealer -- TODO: mdwkrConnectToBroker creates the socket again!
+    let newAPI = WorkerAPI { ctx = ctx
+                           , broker = broker
+                           , service = service
+                           , worker = worker
+                           , verbose = verbose
+                           , heartbeat_at = 0
+                           , liveness = 0
+                           , reconnectDelay_ms = 2500
+                           , heartbeatDelay_ms = 2500
+                           , expect_reply = 0
+                           , reply_to = [empty]
+                           }
+    s_mdwkrConnectToBroker newAPI
 
 mdwkrExchange = undefined
 
