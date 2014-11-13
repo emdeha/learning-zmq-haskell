@@ -41,8 +41,46 @@ heartbeatLiveness :: Int
 heartbeatLiveness = 3
 
 
+{-
+    Public API
+-}
 withMDWorker = undefined
 
+mdwkrInit :: String -> String -> Bool -> IO WorkerAPI
+mdwkrInit broker service verbose = do
+    ctx <- context
+    worker <- socket ctx Dealer -- TODO: mdwkrConnectToBroker creates the socket again!
+    let newAPI = WorkerAPI { ctx = ctx
+                           , broker = broker
+                           , service = service
+                           , worker = worker
+                           , verbose = verbose
+                           , heartbeat_at = 0
+                           , liveness = 0
+                           , reconnectDelay_ms = 2500
+                           , heartbeatDelay_ms = 2500
+                           , expect_reply = 0
+                           , reply_to = [empty]
+                           }
+    s_mdwkrConnectToBroker newAPI
+
+mdwkrExchange = undefined
+
+mdwkrSetReconnect = undefined
+
+mdwkrSetHeartbeat = undefined
+
+{-
+    Private API
+-}
+mdwkrDestroy :: WorkerAPI -> IO ()
+mdwkrDestroy api = do
+    close (worker api)
+    shutdown (ctx api)
+
+{-
+    Helper functions
+-}
 s_mdwkrSendToBroker :: WorkerAPI -> ByteString -> Maybe ByteString -> Maybe [ByteString] -> IO ()
 s_mdwkrSendToBroker api command option msg = do
     let args = [option, Just command, Just mdpwWorker, Just empty]
@@ -69,27 +107,3 @@ s_mdwkrConnectToBroker api = do
                , liveness = heartbeatLiveness 
                , heartbeat_at = nextHeartbeat
                }
-
-mdwkrInit :: String -> String -> Bool -> IO WorkerAPI
-mdwkrInit broker service verbose = do
-    ctx <- context
-    worker <- socket ctx Dealer -- TODO: mdwkrConnectToBroker creates the socket again!
-    let newAPI = WorkerAPI { ctx = ctx
-                           , broker = broker
-                           , service = service
-                           , worker = worker
-                           , verbose = verbose
-                           , heartbeat_at = 0
-                           , liveness = 0
-                           , reconnectDelay_ms = 2500
-                           , heartbeatDelay_ms = 2500
-                           , expect_reply = 0
-                           , reply_to = [empty]
-                           }
-    s_mdwkrConnectToBroker newAPI
-
-mdwkrExchange = undefined
-
-mdwkrSetReconnect = undefined
-
-mdwkrSetHeartbeat = undefined
