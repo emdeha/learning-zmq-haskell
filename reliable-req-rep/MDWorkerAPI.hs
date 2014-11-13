@@ -66,9 +66,13 @@ mdwkrInit broker service verbose = do
 
 mdwkrExchange = undefined
 
-mdwkrSetReconnect = undefined
+mdwkrSetReconnect :: WorkerAPI -> Integer -> IO WorkerAPI
+mdwkrSetReconnect api newReconnectDelay_ms = 
+    return api { reconnectDelay_ms = newReconnectDelay_ms }
 
-mdwkrSetHeartbeat = undefined
+mdwkrSetHeartbeat :: WorkerAPI -> Integer -> IO WorkerAPI
+mdwkrSetHeartbeat api newHeartbeatDelay_ms = 
+    return api { heartbeatDelay_ms = newHeartbeatDelay_ms }
 
 {-
     Private API
