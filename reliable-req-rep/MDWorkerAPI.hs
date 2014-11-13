@@ -10,6 +10,7 @@ module MDWorkerAPI
 
 
 import System.ZMQ4
+import ZHelpers
 import MDPDef
 
 import Control.Exception (bracket)
@@ -29,8 +30,8 @@ data WorkerAPI = WorkerAPI {
     -- Heartbeats
     , heartbeat_at :: Integer
     , liveness :: Int
-    , heartbeatDelay_ms :: Int
-    , reconnectDelay_ms :: Int
+    , heartbeatDelay_ms :: Integer
+    , reconnectDelay_ms :: Integer
 
     , expect_reply :: Int
     , reply_to :: [ByteString]
@@ -53,6 +54,21 @@ s_mdwkrSendToBroker api command option msg = do
         mapM_ (putStrLn . unpack) wrappedMessage
 
     sendMulti (worker api) (N.fromList wrappedMessage)
+
+s_mdwkrConnectToBroker :: WorkerAPI -> IO (WorkerAPI)
+s_mdwkrConnectToBroker api = do
+    close $ worker api
+    reconnectedWorker <- socket (ctx api) Dealer 
+    connect reconnectedWorker (broker api)
+    when (verbose api) $ do
+        putStrLn $ "I: connecting to broker at " ++ (broker api)
+    s_mdwkrSendToBroker api mdpwReady (Just . pack $ service api) Nothing
+
+    nextHeartbeat <- nextHeartbeatTime_ms $ heartbeatDelay_ms api
+    return api { 
+                 liveness = heartbeatLiveness, 
+                 heartbeat_at = nextHeartbeat
+               }
 
 mdwkrExchange = undefined
 
