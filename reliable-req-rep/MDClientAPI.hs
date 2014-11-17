@@ -110,8 +110,8 @@ mdSend api service request = do
         trySend clientSock wrappedRequest = do
             sendMulti clientSock (N.fromList wrappedRequest)
 
-            evts <- poll (fromInteger $ timeout api) [Sock clientSock [In] Nothing] 
-            if In `elem` (evts !! 0)
+            [evts] <- poll (fromInteger $ timeout api) [Sock clientSock [In] Nothing] 
+            if In `elem` evts
             then do
                 msg <- receiveMulti clientSock
                 when (verbose api) $ do

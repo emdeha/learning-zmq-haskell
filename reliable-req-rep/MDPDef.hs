@@ -12,6 +12,7 @@ module MDPDef (
     ,   mdpwDisconnect
 
     ,   mdpsCommands
+    ,   mdpGetIdx
     ) where
 
 import Data.ByteString.Char8 (empty, pack, ByteString(..))
@@ -29,4 +30,8 @@ mdpwHeartbeat = pack "\004"
 mdpwDisconnect = pack "\005"
 
 mdpsCommands = [ empty, pack "READY", pack "REQUEST", pack "REPLY", 
-                        pack "HEARTBEAT", pack "DISCONNECT" ]
+                        pack "HEARTBEAT", pack "DISCONNECT" ] 
+
+mdpGetIdx :: String -> Int
+mdpGetIdx ('\0':'0':num) = read num
+mdpGetIdx cmd = error $ "Invalid cmd " ++ cmd
