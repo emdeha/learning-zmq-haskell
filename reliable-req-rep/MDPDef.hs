@@ -23,15 +23,15 @@ mdpcClient = pack "MDPC01"
 mdpwWorker = pack "MDPW01"
 
 -- MDP/Server commands
-mdpwReady = pack "\001"
-mdpwRequest = pack "\002"
-mdpwReply = pack "\003"
-mdpwHeartbeat = pack "\004"
-mdpwDisconnect = pack "\005"
+mdpwReady = pack "01"
+mdpwRequest = pack "02"
+mdpwReply = pack "03"
+mdpwHeartbeat = pack "04"
+mdpwDisconnect = pack "05"
 
 mdpsCommands = [ empty, pack "READY", pack "REQUEST", pack "REPLY", 
                         pack "HEARTBEAT", pack "DISCONNECT" ] 
 
 mdpGetIdx :: String -> Int
-mdpGetIdx ('\0':'0':num) = read num
+mdpGetIdx ('0':num) = read num
 mdpGetIdx cmd = error $ "Invalid cmd " ++ cmd
