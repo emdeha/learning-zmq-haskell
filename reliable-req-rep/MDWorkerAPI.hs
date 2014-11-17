@@ -132,8 +132,10 @@ mdwkrExchange api reply = do
                         s_mdwkrSendToBroker api mdpwHeartbeat Nothing Nothing
                         nextHeartbeat <- nextHeartbeatTime_ms $ heartbeatDelay_ms api
                         tryExchange api { heartbeat_at = nextHeartbeat
-                                        , expect_reply = True }
-                    else tryExchange api { expect_reply = True }
+                                        , expect_reply = True 
+                                        , liveness = liveness api - 1 }
+                    else tryExchange api { expect_reply = True 
+                                         , liveness = liveness api - 1 }
 
 mdwkrSetReconnect :: WorkerAPI -> Integer -> IO WorkerAPI
 mdwkrSetReconnect api newReconnectDelay_ms = 
