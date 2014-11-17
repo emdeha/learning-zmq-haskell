@@ -173,7 +173,7 @@ s_mdwkrConnectToBroker api = do
     connect reconnectedWorker (broker api)
     when (verbose api) $ do
         putStrLn $ "I: connecting to broker at " ++ (broker api)
-    s_mdwkrSendToBroker api mdpwReady (Just . pack $ service api) Nothing
+    s_mdwkrSendToBroker api { worker = reconnectedWorker } mdpwReady (Just . pack $ service api) Nothing
 
     nextHeartbeat <- nextHeartbeatTime_ms $ heartbeatDelay_ms api
     return api { worker = reconnectedWorker
