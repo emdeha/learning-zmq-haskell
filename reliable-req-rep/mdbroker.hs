@@ -53,7 +53,20 @@ withBroker verbose action =
             action
 
 -- Broker functions
-s_brokerNew = undefined
+s_brokerNew :: Bool -> IO Broker
+s_brokerNew verbose = do
+    ctx <- context
+    bSocket <- socket ctx Router
+    nextHeartbeat <- nextHeartbeatTime_ms heartbeatInterval
+    return Broker { ctx = ctx
+                  , bSocket = bSocket
+                  , verbose = verbose
+                  , services = Map.empty
+                  , workers = Map.empty
+                  , bWaiting = []
+                  , heartbeatAt = nextHeartbeat
+                  , endpoint = []
+                  }
 
 s_brokerDestroy = undefined
 
