@@ -68,7 +68,10 @@ s_brokerNew verbose = do
                   , endpoint = []
                   }
 
-s_brokerDestroy = undefined
+s_brokerDestroy :: Broker -> IO ()
+s_brokerDestroy broker = do
+    close $ bSocket broker
+    shutdwn $ ctx broker
 
 s_brokerBind = undefined
 
