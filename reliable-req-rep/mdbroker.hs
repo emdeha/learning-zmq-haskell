@@ -9,6 +9,7 @@ import System.ZMQ4
 import ZHelpers
 import MDPDef
 
+import Control.Exception (bracket)
 import Data.Map.Strict as Map
 import Data.ByteString.Char8 (pack, unpack, empty, ByteString(..))
 
@@ -44,6 +45,12 @@ data Worker = Worker {
     }
 
 
+withBroker :: Bool -> (Broker -> IO a) -> IO a
+withBroker verbose action = 
+    bracket (s_brokerNew verbose)
+            (s_brokerDestroy)
+            action
+
 -- Broker functions
 s_brokerNew = undefined
 
@@ -76,3 +83,6 @@ s_workerDestroy = undefined
 s_workerSend = undefined
 
 s_workerWaiting = undefined
+
+
+-- Main. Create a new broker and process messages on its socket.
