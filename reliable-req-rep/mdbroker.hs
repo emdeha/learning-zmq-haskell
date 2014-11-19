@@ -71,9 +71,12 @@ s_brokerNew verbose = do
 s_brokerDestroy :: Broker -> IO ()
 s_brokerDestroy broker = do
     close $ bSocket broker
-    shutdwn $ ctx broker
+    shutdown $ ctx broker
 
-s_brokerBind = undefined
+s_brokerBind :: Broker -> String -> IO ()
+s_brokerBind broker endpoint = do
+    bind (bSocket broker) endpoint
+    putStrLn $ "I: MDP broker/0.2.0 is active at " ++ endpoint
 
 s_brokerWorkerMsg = undefined
 
