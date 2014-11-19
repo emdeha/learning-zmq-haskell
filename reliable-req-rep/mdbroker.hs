@@ -78,6 +78,8 @@ s_brokerBind broker endpoint = do
     bind (bSocket broker) endpoint
     putStrLn $ "I: MDP broker/0.2.0 is active at " ++ endpoint
 
+-- Processes READY, REPLY, HEARTBEAT, or DISCONNECT worker message
+s_brokerWorkerMsg :: Broker -> ByteString -> [ByteString] -> IO Broker
 s_brokerWorkerMsg = undefined
 
 s_brokerClientMsg = undefined
@@ -116,28 +118,31 @@ main =
             doPoll broker = do
                 [evts] <- poll (fromInteger heartbeatInterval) [Sock (bSocket broker) [In] Nothing]
 
-                when (In `elem` evts) $ do
-                    msg <- receiveMulti $ bSocket broker
+                newBroker <- if (In `elem` evts) 
+                             then do
+                                  msg <- receiveMulti $ bSocket broker
 
-                    when (verbose broker) $ do
-                        putStrLn "I: received message: "
-                        dumpMsg msg
+                                  when (verbose broker) $ do
+                                      putStrLn "I: received message: "
+                                      dumpMsg msg
 
-                    let sender = msg !! 0
-                        empty = msg !! 1
-                        header = msg !! 2
-                    case header of
-                        head | head == mdpcClient -> s_brokerClientMsg broker sender msg
-                             | head == mdpwWorker -> s_brokerWorkerMsg broker sender msg
-                             | otherwise          -> do putStrLn "E: Invalid message"
-                                                        dumpMsg msg
+                                  let sender = msg !! 0
+                                      empty = msg !! 1
+                                      header = msg !! 2
+                                  case header of
+                                      head | head == mdpcClient -> s_brokerClientMsg broker sender msg
+                                           | head == mdpwWorker -> s_brokerWorkerMsg broker sender msg
+                                           | otherwise          -> do putStrLn "E: Invalid message"
+                                                                      dumpMsg msg
+                                                                      return broker
+                              else return broker   
                 
                 currTime <- currentTime_ms
-                if currTime > heartbeatAt broker
+                if currTime > heartbeatAt newBroker
                 then do
-                    newBroker <- s_brokerPurge
-                    forM_ (bWaiting broker) $ \worker -> do
+                    newBroker' <- s_brokerPurge newBroker
+                    forM_ (bWaiting newBroker') $ \worker -> do
                         s_workerSend worker mdpwHeartbeat Nothing Nothing
                     nextHeartbeat <- nextHeartbeatTime_ms heartbeatInterval
-                    doPoll newBroker { heartbeatAt = nextHeartbeat }
-                else doPoll broker
+                    doPoll newBroker' { heartbeatAt = nextHeartbeat }
+                else doPoll newBroker
