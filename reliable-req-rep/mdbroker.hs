@@ -88,13 +88,14 @@ s_brokerPurge broker = do
     currTime <- currentTime_ms
     let (toPurge, rest) = L.partition (\worker -> currTime > expiry worker)
                                       (bWaiting broker)
-        leftInMap       = M.filterWithKey (isPurgedKey toPurge) (workers broker)
+        leftInMap       = M.filterWithKey (isNotPurgedKey toPurge) (workers broker)
         purgedServices  = purgeWorkersFromServices toPurge (services broker)
-    mapM_ (flip s_workerDelete False) toPurge
+    mapM_ (s_workerSendDisconnect) toPurge
     return broker { bWaiting = rest 
                   , workers = leftInMap 
+                  , services = purgedServices
                   }
-  where isPurgedKey toPurge key _ = 
+  where isNotPurgedKey toPurge key _ = 
             key `notElem` (map (unpack . wId) toPurge)
 
         purgeWorkersFromServices workers services = 
@@ -119,10 +120,9 @@ s_serviceDispatch = undefined
 -- Worker functions
 s_workerRequire = undefined
 
-s_workerDelete :: Worker -> Bool -> IO () 
-s_workerDelete worker isDisconnect =
-    when isDisconnect $ do
-        s_workerSend worker mdpwDisconnect Nothing Nothing
+s_workerSendDisconnect :: Worker -> IO () 
+s_workerSendDisconnect worker =
+    s_workerSend worker mdpwDisconnect Nothing Nothing
 
 s_workerSend = undefined
 
