@@ -111,9 +111,18 @@ s_brokerPurge broker = do
 
 
 -- Service functions
-s_serviceRequire = undefined
 
-s_serviceDestroy = undefined
+-- Inserts a new service in the broker's services.
+-- Differs from the 0MQ tutorial because the caller must make sure that the
+-- service didn't exist before calling this.
+s_serviceRequire :: Broker -> ByteString -> IO Broker
+s_serviceRequire broker serviceFrame = do
+    let newService = Service { name = unpack serviceFrame -- TODO: base16 encode this
+                             , requests = []
+                             , sWaiting = []
+                             , workersCount = 0
+                             }
+    return broker { services = M.insert (name newService) newService (services broker) }
 
 s_serviceDispatch = undefined
 
