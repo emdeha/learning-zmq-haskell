@@ -118,7 +118,17 @@ s_serviceDispatch = undefined
 
 
 -- Worker functions
-s_workerRequire = undefined
+
+-- Inserts a new worker in the broker's workers.
+-- Differs from the 0MQ tutorial because the caller must make sure that the
+-- worker didn't exist before calling this.
+s_workerRequire :: Broker -> ByteString -> IO Broker
+s_workerRequire broker identity = do
+    let newWorker = Worker { wId = identity -- TODO: base16 encode this
+                           , identityFrame = [identity]
+                           , expiry = 0 -- The caller should modify it.
+                           }
+    return broker { workers = M.insert (unpack $ wId newWorker) newWorker (workers broker) }
 
 s_workerSendDisconnect :: Worker -> IO () 
 s_workerSendDisconnect worker =
