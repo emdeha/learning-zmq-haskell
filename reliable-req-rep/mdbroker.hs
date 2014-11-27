@@ -14,8 +14,10 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Exception (bracket)
 import Control.Monad (forever, forM_, mapM_, foldM, when)
 import Data.ByteString.Char8 (pack, unpack, empty, ByteString(..))
+import Data.Maybe (catMaybes, maybeToList)
 import qualified Data.Map.Strict as M
 import qualified Data.List as L (partition)
+import qualified Data.List.NonEmpty as N
 
 heartbeatLiveness = 1
 heartbeatInterval = 2500
@@ -90,7 +92,7 @@ s_brokerPurge broker = do
                                       (bWaiting broker)
         leftInMap       = M.filterWithKey (isNotPurgedKey toPurge) (workers broker)
         purgedServices  = purgeWorkersFromServices toPurge (services broker)
-    mapM_ (s_workerSendDisconnect) toPurge
+    mapM_ (s_workerSendDisconnect broker) toPurge
     return broker { bWaiting = rest 
                   , workers = leftInMap 
                   , services = purgedServices
@@ -130,11 +132,20 @@ s_workerRequire broker identity = do
                            }
     return broker { workers = M.insert (unpack $ wId newWorker) newWorker (workers broker) }
 
-s_workerSendDisconnect :: Worker -> IO () 
-s_workerSendDisconnect worker =
-    s_workerSend worker mdpwDisconnect Nothing Nothing
+s_workerSendDisconnect :: Broker -> Worker -> IO () 
+s_workerSendDisconnect broker worker =
+    s_workerSend broker worker mdpwDisconnect Nothing Nothing
 
-s_workerSend = undefined
+s_workerSend :: Broker -> Worker -> ByteString -> Maybe ByteString -> Maybe [ByteString] -> IO ()
+s_workerSend broker worker cmd option msg = do
+    let msgOpts = option : Just cmd : [Just mdpwWorker]
+        msgFinal = wId worker : (concat . maybeToList $ msg) ++ (catMaybes msgOpts)
+    when (verbose broker) $ do
+        putStrLn $ "I: sending " ++ (unpack $ mdpsCommands !! mdpGetIdx (unpack cmd)) ++ " to worker"
+        dumpMsg msgFinal
+    sendMulti (bSocket broker) (N.fromList msgFinal)
+  where getMsg (Just msg) = msg
+        getMsg Nothing    = [empty]
 
 s_workerWaiting = undefined
 
