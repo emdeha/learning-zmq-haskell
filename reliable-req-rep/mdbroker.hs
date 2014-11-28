@@ -16,7 +16,7 @@ import Control.Monad (forever, forM_, mapM_, foldM, when)
 import Data.Maybe (catMaybes, maybeToList, fromJust, isJust)
 import qualified Data.ByteString.Char8 as B
 import qualified Data.Map.Strict as M
-import qualified Data.List as L (partition, init, length, span)
+import qualified Data.List as L
 import qualified Data.List.NonEmpty as N
 
 heartbeatLiveness = 1
@@ -28,14 +28,14 @@ data Broker = Broker {
     , bSocket :: Socket Router
     , verbose :: Bool
     , endpoint :: String
-    , services :: M.Map String Service
-    , workers :: M.Map String Worker
+    , services :: M.Map B.ByteString Service
+    , workers :: M.Map B.ByteString Worker
     , bWaiting :: [Worker]
     , heartbeatAt :: Integer
     }
 
 data Service = Service {
-      name :: String
+      name :: B.ByteString
     , requests :: [B.ByteString]
     , sWaiting :: [Worker]
     , workersCount :: Int
@@ -82,16 +82,65 @@ s_brokerBind broker endpoint = do
 
 -- Processes READY, REPLY, HEARTBEAT, or DISCONNECT worker message
 s_brokerWorkerMsg :: Broker -> Frame -> Message -> IO Broker
-s_brokerWorkerMsg = undefined
+s_brokerWorkerMsg broker senderFrame msg = do
+    when (L.length msg < 1) $ do
+        error "E: Too little frames in message for worker"
+
+    let (cmdFrame, msg') = pop msg
+        id_string = senderFrame -- TODO: base16 encode this
+        isWorkerReady = M.member id_string (workers broker)
+        (worker, newBroker) = s_workerRequire broker senderFrame
+
+    case cmdFrame of
+        cmd | cmd == mdpwReady -> 
+                -- Not first cmd in session or reserved service frame.
+                if isWorkerReady || (B.pack "mmi.") `B.isPrefixOf` senderFrame
+                then do
+                    s_workerSendDisconnect broker worker
+                    return $ s_brokerDeleteWorker broker worker
+                else do
+                    let (serviceFrame, _) = pop msg'
+                        (service, newBroker) = s_serviceRequire broker serviceFrame
+                        newService = service { workersCount = workersCount service + 1 }
+                    (newBroker', newService') <- s_workerWaiting newBroker newService worker
+                    return newBroker' { services = M.insert (name newService') newService' (services newBroker') }
+            | cmd == mdpwReply ->
+                  if isWorkerReady 
+                  then do
+                      let (client, msg'') = pop msg'
+                          wkrService = s_brokerGetServiceFor worker newBroker
+                          finalMsg = wrap (mdpcClient : name wkrService : msg'') client
+                      sendMulti (bSocket newBroker) (N.fromList finalMsg)
+                      (newBroker', newService') <- s_workerWaiting newBroker wkrService worker
+                      return newBroker' { services = M.insert (name newService') newService'  (services newBroker') }
+                  else do
+                      s_workerSendDisconnect broker worker 
+                      return $ s_brokerDeleteWorker broker worker
+            | cmd == mdpwHeartbeat ->
+                  if isWorkerReady
+                  then do
+                      currTime <- currentTime_ms
+                      let newWorker = worker { expiry = currTime + heartbeatExpiry }
+                      return newBroker { workers = M.insert (wId newWorker) newWorker (workers newBroker) }
+                  else do 
+                      s_workerSendDisconnect broker worker 
+                      return $ s_brokerDeleteWorker broker worker
+            | cmd == mdpwDisconnect ->
+                  return $ s_brokerDeleteWorker broker worker
+            | otherwise -> do
+                  putStrLn "E: Invalid input message"
+                  dumpMsg msg'
+                  return newBroker
 
 -- Process a request coming from a client.
+-- TODO: Add modified service to broker!
 s_brokerClientMsg :: Broker -> Frame -> Message -> IO (Broker, Service)
 s_brokerClientMsg broker senderFrame msg = do
     when (L.length msg < 2) $ do
-        error "E: Too little frames in message"
+        error "E: Too little frames in message for client"
 
     let (serviceFrame, msg') = pop msg
-        (newBroker, service) = s_serviceRequire broker serviceFrame
+        (service, newBroker) = s_serviceRequire broker serviceFrame
         msg'' = wrap msg' senderFrame
 
     if (B.pack "mmi.") `B.isPrefixOf` serviceFrame
@@ -107,12 +156,21 @@ s_brokerClientMsg broker senderFrame msg = do
   where checkService service serviceFrame msg =
             if serviceFrame == B.pack "mmi.service"
             then let name = last msg
-                     namedService = M.lookup (B.unpack name) (services broker)
+                     namedService = M.lookup name (services broker)
                  in  if isJust namedService && workersCount (fromJust namedService) > 0
                      then "200"
                      else "404"
             else "501"
 
+s_brokerDeleteWorker :: Broker -> Worker -> Broker
+s_brokerDeleteWorker broker worker = 
+    let purgedServices = M.map purgeWorker (services broker)
+    in  broker { bWaiting = L.delete worker (bWaiting broker)
+               , workers = M.delete (wId worker) (workers broker) 
+               , services = purgedServices}
+  where purgeWorker service = 
+            service { sWaiting = L.delete worker (sWaiting service)
+                    , workersCount = workersCount service - 1 }
     
 s_brokerPurge :: Broker -> IO Broker
 s_brokerPurge broker = do
@@ -127,7 +185,7 @@ s_brokerPurge broker = do
                   , services = purgedServices
                   }
   where isNotPurgedKey toPurge key _ = 
-            key `notElem` (map (B.unpack . wId) toPurge)
+            key `notElem` (map wId toPurge)
 
         purgeWorkersFromServices workers = M.map purge
           where purge service =
@@ -137,25 +195,31 @@ s_brokerPurge broker = do
                                 , workersCount = (workersCount service) - (length toPurge)
                                 }
 
+s_brokerGetServiceFor :: Worker -> Broker -> Service
+s_brokerGetServiceFor worker broker =
+    snd . head . M.toList $ M.filter containsWorker (services broker)
+  where containsWorker service = L.elem worker (sWaiting service)
+
 
 -- Service functions
 
 -- Inserts a new service in the broker's services if that service didn't exist.
-s_serviceRequire :: Broker -> Frame -> (Broker, Service)
-s_serviceRequire broker serviceFrame = do
-    let foundService = M.lookup (B.unpack serviceFrame) (services broker)
-    case foundService of
-        Nothing -> createNewService
-        Just fs -> (broker, fs)
+s_serviceRequire :: Broker -> Frame -> (Service, Broker)
+s_serviceRequire broker serviceFrame =
+    let foundService = M.lookup serviceFrame (services broker)
+    in case foundService of
+            Nothing -> createNewService
+            Just fs -> (fs, broker)
   where createNewService =
-            let newService = Service { name = B.unpack serviceFrame -- TODO: base16 encode this
+            let newService = Service { name = serviceFrame -- TODO: base16 encode this
                                      , requests = []
                                      , sWaiting = []
                                      , workersCount = 0
                                      }
-            in (broker { services = M.insert (name newService) newService (services broker) }
-               , newService)
+            in (newService
+               , broker { services = M.insert (name newService) newService (services broker) })
 
+-- TODO: Add modified service to broker!
 s_serviceDispatch :: Broker -> Service -> Maybe Message -> IO (Broker, Service)
 s_serviceDispatch broker service msg = do
     purgedBroker <- s_brokerPurge broker
@@ -171,17 +235,19 @@ s_serviceDispatch broker service msg = do
 -- Worker functions
 
 -- Inserts a new worker in the broker's workers.
-s_workerRequire :: Broker -> Frame -> Broker
-s_workerRequire broker identity = do
-    if M.member (B.unpack identity) (workers broker)
-    then broker
-    else createWorker
-  where createWorker =
+s_workerRequire :: Broker -> Frame -> (Worker, Broker)
+s_workerRequire broker identity =
+    let foundWorker = M.lookup identity (workers broker)
+    in  case foundWorker of
+            Nothing -> createNewWorker
+            Just fw -> (fw, broker)
+  where createNewWorker =
             let newWorker = Worker { wId = identity -- TODO: base16 encode this
                                    , identityFrame = [identity]
                                    , expiry = 0 -- The caller should modify it.
                                    }
-            in  broker { workers = M.insert (B.unpack $ wId newWorker) newWorker (workers broker) }
+            in  (newWorker
+                , broker { workers = M.insert (wId newWorker) newWorker (workers broker) })
 
 s_workerSendDisconnect :: Broker -> Worker -> IO () 
 s_workerSendDisconnect broker worker =
@@ -198,6 +264,7 @@ s_workerSend broker worker cmd option msg = do
   where getMsg (Just msg) = msg
         getMsg Nothing    = [B.empty]
 
+-- TODO: Add modified service to broker
 s_workerWaiting :: Broker -> Service -> Worker -> IO (Broker, Service)
 s_workerWaiting broker wService worker = do
     currTime <- currentTime_ms
