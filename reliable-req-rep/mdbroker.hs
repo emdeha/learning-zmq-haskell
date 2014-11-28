@@ -100,7 +100,7 @@ s_brokerPurge broker = do
   where isNotPurgedKey toPurge key _ = 
             key `notElem` (map (unpack . wId) toPurge)
 
-        purgeWorkersFromServices workers services = M.map purge services
+        purgeWorkersFromServices workers = M.map purge
           where purge service =
                     let (toPurge, rest) = L.partition (\worker -> worker `elem` workers)
                                                       (sWaiting service)
@@ -124,8 +124,17 @@ s_serviceRequire broker serviceFrame = do
                              }
     return broker { services = M.insert (name newService) newService (services broker) }
 
-s_serviceDispatch = undefined
-
+s_serviceDispatch :: Broker -> Service -> Maybe [ByteString] -> IO (Broker, Service)
+s_serviceDispatch broker service msg = do
+    purgedBroker <- s_brokerPurge broker
+    let workersWithMessages = zip (sWaiting service) (requests service)
+        wkrsToRemain = filter (\wkr -> wkr `notElem` (map fst workersWithMessages)) (bWaiting broker)
+        rqsToRemain = filter (\rq -> rq `notElem` (map snd workersWithMessages)) (requests service)
+    forM_ workersWithMessages $ \wkrMsg -> do
+        s_workerSend broker (fst wkrMsg) mdpwRequest Nothing (Just $ [snd wkrMsg])
+    return ( purgedBroker { bWaiting = wkrsToRemain }
+           , service { requests = rqsToRemain })
+    
 
 -- Worker functions
 
@@ -161,8 +170,7 @@ s_workerWaiting broker wService worker = do
     let newWorker = worker { expiry = currTime + heartbeatExpiry }
         newService = wService { sWaiting = newWorker : sWaiting wService }
         newBroker = broker { bWaiting = newWorker : bWaiting broker }
-        dispatched = s_serviceDispatch newBroker newService Nothing
-    return dispatched
+    s_serviceDispatch newBroker newService Nothing
 
 
 -- Main. Create a new broker and process messages on its socket.
