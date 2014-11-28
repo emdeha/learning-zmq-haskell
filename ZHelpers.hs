@@ -14,6 +14,10 @@ import Text.Printf (printf)
 import qualified Data.ByteString as B
 
 
+type Frame = B.ByteString
+type Message = [Frame]
+
+
 dumpMsg :: [B.ByteString] -> IO ()
 dumpMsg msg_parts = do
     putStrLn "----------------------------------------"
@@ -60,3 +64,23 @@ nextHeartbeatTime_ms :: Integer -> IO Integer
 nextHeartbeatTime_ms heartbeatInterval_ms = do
     currTime <- currentTime_ms
     return $ currTime + heartbeatInterval_ms
+
+-- Message frames util functions
+--
+
+-- Push frame plus empty frame before first frame.
+wrap :: Message -> Frame -> Message
+wrap msg frame = frame : B.empty : msg
+
+-- Push frame before all frames
+push :: Message -> Frame -> Message
+push msg frame = frame : msg
+
+-- Pop first frame from message.
+-- If there was a first frame, returns a tuple containing the popped frame and
+-- the modified message.
+-- Otherwise it returns Nothing
+pop :: Message -> Maybe (Frame, Message)
+pop [] = Nothing
+pop [frame] = Just (frame, [B.empty])
+pop (frame:rest) = Just (frame, rest)
