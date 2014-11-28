@@ -13,10 +13,10 @@ import Control.Monad.Trans.State
 import Control.Monad.IO.Class (liftIO)
 import Control.Exception (bracket)
 import Control.Monad (forever, forM_, mapM_, foldM, when)
-import Data.ByteString.Char8 (pack, unpack, empty, ByteString(..))
-import Data.Maybe (catMaybes, maybeToList)
+import Data.Maybe (catMaybes, maybeToList, fromJust, isJust)
+import qualified Data.ByteString.Char8 as B
 import qualified Data.Map.Strict as M
-import qualified Data.List as L (partition)
+import qualified Data.List as L (partition, init, length)
 import qualified Data.List.NonEmpty as N
 
 heartbeatLiveness = 1
@@ -36,14 +36,14 @@ data Broker = Broker {
 
 data Service = Service {
       name :: String
-    , requests :: [ByteString]
+    , requests :: [B.ByteString]
     , sWaiting :: [Worker]
     , workersCount :: Int
     }
 
 data Worker = Worker {
-      wId :: ByteString
-    , identityFrame :: [ByteString]
+      wId :: B.ByteString
+    , identityFrame :: [B.ByteString]
     , expiry :: Integer
     } deriving (Eq)
 
@@ -84,9 +84,35 @@ s_brokerBind broker endpoint = do
 s_brokerWorkerMsg = undefined
 
 -- Process a request coming from a client.
---s_brokerClientMsg :: Broker -> ByteString -> [ByteString] -> 
-s_brokerClientMsg = undefined
+s_brokerClientMsg :: Broker -> B.ByteString -> [B.ByteString] -> IO (Broker, Service)
+s_brokerClientMsg broker senderFrame msg = do
+    when (L.length msg < 2) $ do
+        error "E: Too little frames in message"
 
+    let (serviceFrame, msg') = pop msg
+        (newBroker, service) = s_serviceRequire broker serviceFrame
+        msg'' = wrap msg' senderFrame
+
+    if (B.pack "mmi.") `B.isPrefixOf` serviceFrame
+    then do
+        let returnCode = B.pack $ checkService service serviceFrame msg''
+            returnMsg = L.init msg'' ++ [returnCode]
+            (client, msg''') = pop msg''
+            finalMsg = wrap (mdpcClient : serviceFrame : msg''') client
+        sendMulti (bSocket newBroker) (N.fromList finalMsg)
+        return (newBroker, service)
+    else s_serviceDispatch newBroker service (Just msg'')
+
+  where checkService service serviceFrame msg =
+            if serviceFrame == B.pack "mmi.service"
+            then let name = last msg
+                     namedService = M.lookup (B.unpack name) (services broker)
+                 in  if isJust namedService && workersCount (fromJust namedService) > 0
+                     then "200"
+                     else "404"
+            else "501"
+
+    
 -- TODO: This should stop as soon as it finds the first non-expired worker
 s_brokerPurge :: Broker -> IO Broker
 s_brokerPurge broker = do
@@ -101,7 +127,7 @@ s_brokerPurge broker = do
                   , services = purgedServices
                   }
   where isNotPurgedKey toPurge key _ = 
-            key `notElem` (map (unpack . wId) toPurge)
+            key `notElem` (map (B.unpack . wId) toPurge)
 
         purgeWorkersFromServices workers = M.map purge
           where purge service =
@@ -116,20 +142,22 @@ s_brokerPurge broker = do
 -- Service functions
 
 -- Inserts a new service in the broker's services if that service didn't exist.
-s_serviceRequire :: Broker -> ByteString -> Broker
+s_serviceRequire :: Broker -> B.ByteString -> (Broker, Service)
 s_serviceRequire broker serviceFrame = do
-    if M.member (unpack serviceFrame) (services broker)
-    then createNewService
-    else broker
+    let foundService = M.lookup (B.unpack serviceFrame) (services broker)
+    case foundService of
+        Nothing -> createNewService
+        Just fs -> (broker, fs)
   where createNewService =
-            let newService = Service { name = unpack serviceFrame -- TODO: base16 encode this
+            let newService = Service { name = B.unpack serviceFrame -- TODO: base16 encode this
                                      , requests = []
                                      , sWaiting = []
                                      , workersCount = 0
                                      }
-            in broker { services = M.insert (name newService) newService (services broker) }
+            in (broker { services = M.insert (name newService) newService (services broker) }
+               , newService)
 
-s_serviceDispatch :: Broker -> Service -> Maybe [ByteString] -> IO (Broker, Service)
+s_serviceDispatch :: Broker -> Service -> Maybe [B.ByteString] -> IO (Broker, Service)
 s_serviceDispatch broker service msg = do
     purgedBroker <- s_brokerPurge broker
     let workersWithMessages = zip (sWaiting service) (requests service)
@@ -144,32 +172,32 @@ s_serviceDispatch broker service msg = do
 -- Worker functions
 
 -- Inserts a new worker in the broker's workers.
-s_workerRequire :: Broker -> ByteString -> Broker
+s_workerRequire :: Broker -> B.ByteString -> Broker
 s_workerRequire broker identity = do
-    if M.member (unpack identity) (workers broker)
+    if M.member (B.unpack identity) (workers broker)
     then broker
     else createWorker
   where createWorker =
-    let newWorker = Worker { wId = identity -- TODO: base16 encode this
-                           , identityFrame = [identity]
-                           , expiry = 0 -- The caller should modify it.
-                           }
-    broker { workers = M.insert (unpack $ wId newWorker) newWorker (workers broker) }
+            let newWorker = Worker { wId = identity -- TODO: base16 encode this
+                                   , identityFrame = [identity]
+                                   , expiry = 0 -- The caller should modify it.
+                                   }
+            in  broker { workers = M.insert (B.unpack $ wId newWorker) newWorker (workers broker) }
 
 s_workerSendDisconnect :: Broker -> Worker -> IO () 
 s_workerSendDisconnect broker worker =
     s_workerSend broker worker mdpwDisconnect Nothing Nothing
 
-s_workerSend :: Broker -> Worker -> ByteString -> Maybe ByteString -> Maybe [ByteString] -> IO ()
+s_workerSend :: Broker -> Worker -> B.ByteString -> Maybe B.ByteString -> Maybe [B.ByteString] -> IO ()
 s_workerSend broker worker cmd option msg = do
     let msgOpts = option : Just cmd : [Just mdpwWorker]
         msgFinal = wId worker : (concat . maybeToList $ msg) ++ (catMaybes msgOpts)
     when (verbose broker) $ do
-        putStrLn $ "I: sending " ++ (unpack $ mdpsCommands !! mdpGetIdx (unpack cmd)) ++ " to worker"
+        putStrLn $ "I: sending " ++ (B.unpack $ mdpsCommands !! mdpGetIdx (B.unpack cmd)) ++ " to worker"
         dumpMsg msgFinal
     sendMulti (bSocket broker) (N.fromList msgFinal)
   where getMsg (Just msg) = msg
-        getMsg Nothing    = [empty]
+        getMsg Nothing    = [B.empty]
 
 s_workerWaiting :: Broker -> Service -> Worker -> IO (Broker, Service)
 s_workerWaiting broker wService worker = do
