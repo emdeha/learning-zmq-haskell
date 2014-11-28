@@ -16,7 +16,7 @@ import Control.Monad (forever, forM_, mapM_, foldM, when)
 import Data.Maybe (catMaybes, maybeToList, fromJust, isJust)
 import qualified Data.ByteString.Char8 as B
 import qualified Data.Map.Strict as M
-import qualified Data.List as L (partition, init, length)
+import qualified Data.List as L (partition, init, length, span)
 import qualified Data.List.NonEmpty as N
 
 heartbeatLiveness = 1
@@ -117,8 +117,8 @@ s_brokerClientMsg broker senderFrame msg = do
 s_brokerPurge :: Broker -> IO Broker
 s_brokerPurge broker = do
     currTime <- currentTime_ms
-    let (toPurge, rest) = L.partition (\worker -> currTime > expiry worker)
-                                      (bWaiting broker)
+    let (toPurge, rest) = L.span (\worker -> currTime > expiry worker)
+                                 (bWaiting broker)
         leftInMap       = M.filterWithKey (isNotPurgedKey toPurge) (workers broker)
         purgedServices  = purgeWorkersFromServices toPurge (services broker)
     mapM_ (s_workerSendDisconnect broker) toPurge
