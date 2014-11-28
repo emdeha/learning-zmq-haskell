@@ -5,6 +5,7 @@ import System.ZMQ4.Monadic
 import Numeric (showHex)
 
 import Control.Applicative ((<$>))
+import Control.Monad (when)
 import System.Random
 import System.Locale
 import Data.Time
@@ -64,6 +65,10 @@ nextHeartbeatTime_ms :: Integer -> IO Integer
 nextHeartbeatTime_ms heartbeatInterval_ms = do
     currTime <- currentTime_ms
     return $ currTime + heartbeatInterval_ms
+
+-- Simple assertion mechanism
+z_assert :: Bool -> String -> IO ()
+z_assert pred msg = when (not pred) $ error msg
 
 -- Message frames util functions
 --
