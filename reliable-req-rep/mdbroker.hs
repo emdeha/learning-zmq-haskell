@@ -83,8 +83,11 @@ s_brokerBind broker endpoint = do
 -- Processes READY, REPLY, HEARTBEAT, or DISCONNECT worker message
 s_brokerWorkerMsg = undefined
 
+-- Process a request coming from a client.
+--s_brokerClientMsg :: Broker -> ByteString -> [ByteString] -> 
 s_brokerClientMsg = undefined
 
+-- TODO: This should stop as soon as it finds the first non-expired worker
 s_brokerPurge :: Broker -> IO Broker
 s_brokerPurge broker = do
     currTime <- currentTime_ms
@@ -112,17 +115,19 @@ s_brokerPurge broker = do
 
 -- Service functions
 
--- Inserts a new service in the broker's services.
--- Differs from the 0MQ tutorial because the caller must make sure that the
--- service didn't exist before calling this.
+-- Inserts a new service in the broker's services if that service didn't exist.
 s_serviceRequire :: Broker -> ByteString -> IO Broker
 s_serviceRequire broker serviceFrame = do
-    let newService = Service { name = unpack serviceFrame -- TODO: base16 encode this
-                             , requests = []
-                             , sWaiting = []
-                             , workersCount = 0
-                             }
-    return broker { services = M.insert (name newService) newService (services broker) }
+    if M.member (unpack serviceFrame) (services broker)
+    then return createNewService
+    else return broker
+  where createNewService =
+            let newService = Service { name = unpack serviceFrame -- TODO: base16 encode this
+                                     , requests = []
+                                     , sWaiting = []
+                                     , workersCount = 0
+                                     }
+            in broker { services = M.insert (name newService) newService (services broker) }
 
 s_serviceDispatch :: Broker -> Service -> Maybe [ByteString] -> IO (Broker, Service)
 s_serviceDispatch broker service msg = do
