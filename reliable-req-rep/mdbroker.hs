@@ -276,47 +276,40 @@ s_workerWaiting broker wService worker = do
 
 -- Main. Create a new broker and process messages on its socket.
 main :: IO ()
-main = undefined
-{-
+main = 
     withBroker True $ \broker -> do
         s_brokerBind broker "tcp://*:5555"
-        evalState doPoll broker-- (foreverS doPoll) broker
-      where --doPoll :: State Broker (IO ())
-            doPoll =
-                forever $ do
-                    broker <- get
-                    [evts] <- poll (fromInteger heartbeatInterval) 
-                                   [Sock (bSocket broker) [In] Nothing]
 
-                    when (In `elem` evts) $ do
-                        msg <- liftIO $ receiveMulti $ bSocket broker
+        process broker
+      where process broker = do
+            [evts] <- poll (fromInteger $ heartbeatInterval) [Sock (bSocket broker) [In] Nothing]
 
-                        when (verbose broker) $ do
-                            liftIO $ putStrLn "I: received message: " >> dumpMsg msg
+            when (In `L.elem` evts) $ do
+                msg <- receiveMulti (bSocket broker)
+                when (verbose broker) $ do
+                    putStrLn "I: Received message: "
+                    dumpMsg msg
 
-                        let sender = msg !! 0
-                            empty = msg !! 1
-                            header = msg !! 2
-                            msg' = drop 3 msg
-                        case header of
-                            head | head == mdpcClient -> s_brokerClientMsg sender msg'
-                                 | head == mdpwWorker -> s_brokerWorkerMsg sender msg'
-                                 | otherwise          -> do liftIO $ putStrLn "E: Invalid message"
-                                                            liftIO $ dumpMsg msg'
-     
-                    currTime <- liftIO $ currentTime_ms
-                    when (currTime > heartbeatAt broker) $ do
-                        s_brokerPurge
-                        forM_ (bWaiting broker) $ \worker -> do
-                            s_workerSend worker mdpwHeartbeat Nothing Nothing
-                        nextHeartbeat <- liftIO $ nextHeartbeatTime_ms heartbeatInterval
-                        newBroker <- get
-                        put newBroker { heartbeatAt = nextHeartbeat }
+                let (sender, msg') = pop msg
+                    (empty, msg'') = pop msg'
+                    (header, finalMsg) = pop msg''
+                case header of
+                    head | head == mdpcClient -> do 
+                                (newBroker, newService) <- s_brokerClientMsg broker sender finalMsg
+                                process newBroker
+                         | head == mdpwWorker -> do
+                                newBroker <- s_brokerWorkerMsg broker sender finalMsg  
+                                process newBroker
+                         | otherwise -> do
+                                putStrLn "E: Invalid message"
+                                dumpMsg finalMsg
+                                process broker
+            
+            currTime <- currentTime_ms
+            when (currTime > heartbeatAt broker) $ do
+                newBroker <- s_brokerPurge broker
+                mapM_ (\worker -> s_workerSend newBroker worker mdpwHeartbeat Nothing Nothing) (bWaiting broker)
+                -- TODO: Fetch currTime again
+                process $ newBroker { heartbeatAt = currTime + heartbeatInterval }
 
-foreverS :: State s a -> State s a
-foreverS body =
-    do modify (execState body)
-       foreverS body
-  where execState :: State s a -> s -> s
-        execState mv init_st = snd (runState mv init_st)
--}
+            process broker
