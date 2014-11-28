@@ -81,10 +81,11 @@ s_brokerBind broker endpoint = do
     putStrLn $ "I: MDP broker/0.2.0 is active at " ++ endpoint
 
 -- Processes READY, REPLY, HEARTBEAT, or DISCONNECT worker message
+s_brokerWorkerMsg :: Broker -> Frame -> Message -> IO Broker
 s_brokerWorkerMsg = undefined
 
 -- Process a request coming from a client.
-s_brokerClientMsg :: Broker -> B.ByteString -> [B.ByteString] -> IO (Broker, Service)
+s_brokerClientMsg :: Broker -> Frame -> Message -> IO (Broker, Service)
 s_brokerClientMsg broker senderFrame msg = do
     when (L.length msg < 2) $ do
         error "E: Too little frames in message"
@@ -113,7 +114,6 @@ s_brokerClientMsg broker senderFrame msg = do
             else "501"
 
     
--- TODO: This should stop as soon as it finds the first non-expired worker
 s_brokerPurge :: Broker -> IO Broker
 s_brokerPurge broker = do
     currTime <- currentTime_ms
@@ -136,13 +136,12 @@ s_brokerPurge broker = do
                     in  service { sWaiting = rest
                                 , workersCount = (workersCount service) - (length toPurge)
                                 }
-           
 
 
 -- Service functions
 
 -- Inserts a new service in the broker's services if that service didn't exist.
-s_serviceRequire :: Broker -> B.ByteString -> (Broker, Service)
+s_serviceRequire :: Broker -> Frame -> (Broker, Service)
 s_serviceRequire broker serviceFrame = do
     let foundService = M.lookup (B.unpack serviceFrame) (services broker)
     case foundService of
@@ -157,7 +156,7 @@ s_serviceRequire broker serviceFrame = do
             in (broker { services = M.insert (name newService) newService (services broker) }
                , newService)
 
-s_serviceDispatch :: Broker -> Service -> Maybe [B.ByteString] -> IO (Broker, Service)
+s_serviceDispatch :: Broker -> Service -> Maybe Message -> IO (Broker, Service)
 s_serviceDispatch broker service msg = do
     purgedBroker <- s_brokerPurge broker
     let workersWithMessages = zip (sWaiting service) (requests service)
@@ -172,7 +171,7 @@ s_serviceDispatch broker service msg = do
 -- Worker functions
 
 -- Inserts a new worker in the broker's workers.
-s_workerRequire :: Broker -> B.ByteString -> Broker
+s_workerRequire :: Broker -> Frame -> Broker
 s_workerRequire broker identity = do
     if M.member (B.unpack identity) (workers broker)
     then broker
@@ -188,7 +187,7 @@ s_workerSendDisconnect :: Broker -> Worker -> IO ()
 s_workerSendDisconnect broker worker =
     s_workerSend broker worker mdpwDisconnect Nothing Nothing
 
-s_workerSend :: Broker -> Worker -> B.ByteString -> Maybe B.ByteString -> Maybe [B.ByteString] -> IO ()
+s_workerSend :: Broker -> Worker -> Frame -> Maybe Frame -> Maybe Message -> IO ()
 s_workerSend broker worker cmd option msg = do
     let msgOpts = option : Just cmd : [Just mdpwWorker]
         msgFinal = wId worker : (concat . maybeToList $ msg) ++ (catMaybes msgOpts)
