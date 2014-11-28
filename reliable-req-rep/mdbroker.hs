@@ -116,11 +116,11 @@ s_brokerPurge broker = do
 -- Service functions
 
 -- Inserts a new service in the broker's services if that service didn't exist.
-s_serviceRequire :: Broker -> ByteString -> IO Broker
+s_serviceRequire :: Broker -> ByteString -> Broker
 s_serviceRequire broker serviceFrame = do
     if M.member (unpack serviceFrame) (services broker)
-    then return createNewService
-    else return broker
+    then createNewService
+    else broker
   where createNewService =
             let newService = Service { name = unpack serviceFrame -- TODO: base16 encode this
                                      , requests = []
@@ -144,15 +144,17 @@ s_serviceDispatch broker service msg = do
 -- Worker functions
 
 -- Inserts a new worker in the broker's workers.
--- Differs from the 0MQ tutorial because the caller must make sure that the
--- worker didn't exist before calling this.
-s_workerRequire :: Broker -> ByteString -> IO Broker
+s_workerRequire :: Broker -> ByteString -> Broker
 s_workerRequire broker identity = do
+    if M.member (unpack identity) (workers broker)
+    then broker
+    else createWorker
+  where createWorker =
     let newWorker = Worker { wId = identity -- TODO: base16 encode this
                            , identityFrame = [identity]
                            , expiry = 0 -- The caller should modify it.
                            }
-    return broker { workers = M.insert (unpack $ wId newWorker) newWorker (workers broker) }
+    broker { workers = M.insert (unpack $ wId newWorker) newWorker (workers broker) }
 
 s_workerSendDisconnect :: Broker -> Worker -> IO () 
 s_workerSendDisconnect broker worker =
