@@ -156,6 +156,7 @@ mdwkrDestroy api = do
 {-
     Helper functions
 -}
+-- Wraps a message with the appropriate MDP data and sends it to the broker
 s_mdwkrSendToBroker :: WorkerAPI -> Frame -> Maybe Frame -> Maybe Message -> IO ()
 s_mdwkrSendToBroker api command option msg = do
     let args = [option, Just command, Just mdpwWorker, Just empty]
@@ -168,6 +169,7 @@ s_mdwkrSendToBroker api command option msg = do
 
     sendMulti (worker api) (N.fromList wrappedMessage)
 
+-- Reconnects the worker to the broker and sends a READY message.
 s_mdwkrConnectToBroker :: WorkerAPI -> IO WorkerAPI
 s_mdwkrConnectToBroker api = do
     close $ worker api
