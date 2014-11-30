@@ -78,7 +78,8 @@ mdwkrExchange api reply = do
     tryExchange api { expect_reply = True }
   where tryExchange :: WorkerAPI -> IO (WorkerAPI, [ByteString])
         tryExchange api = do
-            [evts] <- poll (fromInteger $ heartbeatDelay_ms api) [Sock (worker api) [In] Nothing]
+            [evts] <- poll (fromInteger $ heartbeatDelay_ms api) 
+                           [Sock (worker api) [In] Nothing]
 
             if In `elem` evts
             then do
@@ -91,6 +92,7 @@ mdwkrExchange api reply = do
                     putStrLn $ "E: Invalid message format"
                     error ""
 
+                -- TODO: use wrap, pop, etc.
                 let empty_ = msg !! 0
                     header = msg !! 1
                     command = msg !! 2
@@ -104,9 +106,10 @@ mdwkrExchange api reply = do
 
                 case command of
                     cmd | cmd == mdpwRequest -> return (api { reply_to = drop 3 msg 
-                                                       , liveness = heartbeatLiveness
-                                                       , expect_reply = True
-                                                       }, msg )
+                                                            , liveness = heartbeatLiveness
+                                                            , expect_reply = True
+                                                            }, 
+                                                        msg)
                         | cmd == mdpwDisconnect -> do
                               newAPI <- s_mdwkrConnectToBroker $ api { liveness = heartbeatLiveness
                                                                      , expect_reply = True }
@@ -160,7 +163,7 @@ s_mdwkrSendToBroker :: WorkerAPI -> ByteString -> Maybe ByteString -> Maybe [Byt
 s_mdwkrSendToBroker api command option msg = do
     let args = [option, Just command, Just mdpwWorker, Just empty]
         msg' = fromMaybe [] msg
-        wrappedMessage = msg' ++ catMaybes args
+        wrappedMessage = (catMaybes args) ++ msg'
     when (verbose api) $ do
         let strCmd = mdpsCommands !! (mdpGetIdx . unpack $ command)
         putStrLn $ "I: Sending " ++ unpack strCmd ++ " to broker"
@@ -175,7 +178,8 @@ s_mdwkrConnectToBroker api = do
     connect reconnectedWorker (broker api)
     when (verbose api) $ do
         putStrLn $ "I: connecting to broker at " ++ (broker api)
-    s_mdwkrSendToBroker api { worker = reconnectedWorker } mdpwReady (Just . pack $ service api) Nothing
+    s_mdwkrSendToBroker api { worker = reconnectedWorker } 
+                        mdpwReady (Just . pack $ service api) Nothing
 
     nextHeartbeat <- nextHeartbeatTime_ms $ heartbeatDelay_ms api
     return api { worker = reconnectedWorker

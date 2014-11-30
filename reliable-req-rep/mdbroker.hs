@@ -1,10 +1,6 @@
 {-
     Majordomo Protocol Broker
 -}
-module MDBrokerAPI 
-    (
-    ) where
-
 import System.ZMQ4
 import ZHelpers
 import MDPDef
@@ -128,7 +124,7 @@ s_brokerWorkerMsg broker senderFrame msg = do
             | cmd == mdpwDisconnect ->
                   return $ s_brokerDeleteWorker broker worker
             | otherwise -> do
-                  putStrLn "E: Invalid input message"
+                  putStrLn $ "E: Invalid input message " ++ (B.unpack cmd)
                   dumpMsg msg'
                   return newBroker
 
@@ -255,14 +251,13 @@ s_workerSendDisconnect broker worker =
 
 s_workerSend :: Broker -> Worker -> Frame -> Maybe Frame -> Maybe Message -> IO ()
 s_workerSend broker worker cmd option msg = do
-    let msgOpts = option : Just cmd : [Just mdpwWorker]
+    let msgOpts = [option, Just cmd, Just mdpwWorker]
         msgFinal = wId worker : (concat . maybeToList $ msg) ++ (catMaybes msgOpts)
     when (verbose broker) $ do
         putStrLn $ "I: sending " ++ (B.unpack $ mdpsCommands !! mdpGetIdx (B.unpack cmd)) ++ " to worker"
         dumpMsg msgFinal
+
     sendMulti (bSocket broker) (N.fromList msgFinal)
-  where getMsg (Just msg) = msg
-        getMsg Nothing    = [B.empty]
 
 -- TODO: Add modified service to broker
 s_workerWaiting :: Broker -> Service -> Worker -> IO (Broker, Service)
@@ -282,10 +277,12 @@ main =
 
         process broker
       where process broker = do
-            [evts] <- poll (fromInteger $ heartbeatInterval) [Sock (bSocket broker) [In] Nothing]
+            [evts] <- poll (fromInteger $ heartbeatInterval) 
+                           [Sock (bSocket broker) [In] Nothing]
 
             when (In `L.elem` evts) $ do
                 msg <- receiveMulti (bSocket broker)
+
                 when (verbose broker) $ do
                     putStrLn "I: Received message: "
                     dumpMsg msg
@@ -301,7 +298,7 @@ main =
                                 newBroker <- s_brokerWorkerMsg broker sender finalMsg  
                                 process newBroker
                          | otherwise -> do
-                                putStrLn "E: Invalid message"
+                                putStrLn $ "E: Invalid message: " ++ (B.unpack head)
                                 dumpMsg finalMsg
                                 process broker
             

@@ -9,6 +9,8 @@ main = do
     hSetBuffering stdout NoBuffering
 
     withMDWorker "tcp://localhost:5555" "echo" True $ \session ->
-        forever $ do
-            request <- mdwkrExchange session [empty]
-            mapM_ (putStrLn . unpack) (snd request)
+        doEcho session [empty]
+      where doEcho session reply = do
+                request <- mdwkrExchange session reply
+                mapM_ (putStrLn . unpack) (snd request)
+                doEcho (fst request) (snd request)
