@@ -35,7 +35,7 @@ data WorkerAPI = WorkerAPI {
     , reconnectDelay_ms :: Integer
 
     , expect_reply :: Bool
-    , reply_to :: [ByteString]
+    , reply_to :: Frame
     }
 
 heartbeatLiveness :: Int
@@ -65,20 +65,19 @@ mdwkrInit broker service verbose = do
                            , reconnectDelay_ms = 2500
                            , heartbeatDelay_ms = 2500
                            , expect_reply = False
-                           , reply_to = [empty]
+                           , reply_to = empty
                            }
     s_mdwkrConnectToBroker newAPI
 
 -- Send reply to broker and wait for request
--- TODO: Use state
-mdwkrExchange :: WorkerAPI -> [ByteString] -> IO (WorkerAPI, [ByteString])
+mdwkrExchange :: WorkerAPI -> Message -> IO (WorkerAPI, Message)
 mdwkrExchange api reply = do
-    s_mdwkrSendToBroker api mdpwReply Nothing (Just $ reply_to api ++ reply) 
+    s_mdwkrSendToBroker api mdpwReply Nothing (Just $ z_wrap reply (reply_to api)) 
 
     tryExchange api { expect_reply = True }
-  where tryExchange :: WorkerAPI -> IO (WorkerAPI, [ByteString])
+  where tryExchange :: WorkerAPI -> IO (WorkerAPI, Message)
         tryExchange api = do
-            [evts] <- poll (fromInteger $ heartbeatDelay_ms api) 
+            [evts] <- poll (fromInteger $ heartbeatDelay_ms api)
                            [Sock (worker api) [In] Nothing]
 
             if In `elem` evts
@@ -86,26 +85,22 @@ mdwkrExchange api reply = do
                 msg <- receiveMulti $ worker api
                 when (verbose api) $ do
                     putStrLn $ "I: Received message from broker: "
-                    mapM_ (putStrLn . unpack) msg
+                    dumpMsg msg
                 
-                when (length msg <= 3) $ do
-                    putStrLn $ "E: Invalid message format"
-                    error ""
+                when (length msg <= 3) $
+                    error "E: Invalid message format"
 
-                -- TODO: use wrap, pop, etc.
-                let empty_ = msg !! 0
-                    header = msg !! 1
-                    command = msg !! 2
-                -- TODO: error "msg", instead of putStrLn
-                when (empty_ /= empty) $ do
-                    putStrLn $ "E: Not an empty first frame"
-                    error ""
-                when (header /= mdpwWorker) $ do
-                    putStrLn $ "E: Not a valid MDP header"
-                    error ""
+                let (empty_, msg') = z_pop msg
+                    (header, msg'') = z_pop msg'
+                    (command, msg''') = z_pop msg''
+
+                when (empty_ /= empty) $
+                    error "E: Not an empty first frame"
+                when (header /= mdpwWorker) $
+                    error "E: Not a valid MDP header"
 
                 case command of
-                    cmd | cmd == mdpwRequest -> return (api { reply_to = drop 3 msg 
+                    cmd | cmd == mdpwRequest -> return (api { reply_to = fst . z_pop $ msg 
                                                             , liveness = heartbeatLiveness
                                                             , expect_reply = True
                                                             }, 
@@ -115,11 +110,13 @@ mdwkrExchange api reply = do
                                                                      , expect_reply = True }
                               tryExchange newAPI
                         | cmd == mdpwHeartbeat -> do
-                              tryExchange api { expect_reply = True }
+                              tryExchange api { liveness = heartbeatLiveness
+                                              , expect_reply = True }
                         | otherwise -> do
                               putStrLn "E: Invalid input message"
-                              mapM_ (putStrLn . unpack) msg
-                              tryExchange api { expect_reply = True }
+                              dumpMsg msg
+                              tryExchange api { liveness = heartbeatLiveness
+                                              , expect_reply = True }
             else do
                 if (liveness api == 0)
                 then do
@@ -159,7 +156,7 @@ mdwkrDestroy api = do
 {-
     Helper functions
 -}
-s_mdwkrSendToBroker :: WorkerAPI -> ByteString -> Maybe ByteString -> Maybe [ByteString] -> IO ()
+s_mdwkrSendToBroker :: WorkerAPI -> Frame -> Maybe Frame -> Maybe Message -> IO ()
 s_mdwkrSendToBroker api command option msg = do
     let args = [option, Just command, Just mdpwWorker, Just empty]
         msg' = fromMaybe [] msg
@@ -167,7 +164,7 @@ s_mdwkrSendToBroker api command option msg = do
     when (verbose api) $ do
         let strCmd = mdpsCommands !! (mdpGetIdx . unpack $ command)
         putStrLn $ "I: Sending " ++ unpack strCmd ++ " to broker"
-        mapM_ (putStrLn . unpack) wrappedMessage
+        dumpMsg wrappedMessage
 
     sendMulti (worker api) (N.fromList wrappedMessage)
 

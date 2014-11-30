@@ -71,18 +71,18 @@ nextHeartbeatTime_ms heartbeatInterval_ms = do
 --
 
 -- Push frame plus empty frame before first frame.
-wrap :: Message -> Frame -> Message
-wrap msg frame = frame : B.empty : msg
+z_wrap :: Message -> Frame -> Message
+z_wrap msg frame = frame : B.empty : msg
 
 -- Push frame before all frames
-push :: Message -> Frame -> Message
-push msg frame = frame : msg
+z_push :: Message -> Frame -> Message
+z_push msg frame = frame : msg
 
 -- Pop first frame from message.
 -- Returns an empty frame/message pair if there's nothing in the message in order to
 -- make more convenient the construction of new messages on the fly.
 -- TODO: Think how to put a Maybe in here.
-pop :: Message -> (Frame, Message)
-pop [] = (B.empty, [B.empty])
-pop [frame] = (frame, [B.empty])
-pop (frame:rest) = (frame, rest)
+z_pop :: Message -> (Frame, Message)
+z_pop [] = (B.empty, [B.empty])
+z_pop [frame] = (frame, [B.empty])
+z_pop (frame:rest) = (frame, rest)
