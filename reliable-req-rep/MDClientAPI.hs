@@ -9,6 +9,8 @@ module MDClientAPI
     ) where
 
 
+import ZHelpers
+import MDPDef
 import System.ZMQ4
 
 import Control.Monad (when, liftM)
@@ -16,8 +18,6 @@ import Control.Applicative ((<$>))
 import Control.Exception (bracket)
 import Data.ByteString.Char8 (pack, unpack, empty, ByteString(..))
 import qualified Data.List.NonEmpty as N
-
-mdpcClient = "MDPC01" 
 
 
 data ClientAPI = ClientAPI {
@@ -36,10 +36,65 @@ withMDCli broker verbose act =
             (mdDestroy)
             act
 
+{-
+    Public API
+-}
+mdSetTimeout :: ClientAPI -> Integer -> IO ClientAPI
+mdSetTimeout api newTimeout = return api { timeout = newTimeout }
+
+mdSetRetries :: ClientAPI -> Int -> IO ClientAPI
+mdSetRetries api newRetries = return api { retries = newRetries }
+
+-- Sends a request to the broker and retries for a reply until it can
+mdSend :: ClientAPI -> String -> Message -> IO Message
+mdSend api service request = do
+    -- Protocol frames
+    -- Frame 1: "MDPCxy" (six bytes, MDP/Client x.y)
+    -- Frame 2: Service name (printable string)
+    let wrappedRequest = [mdpcClient, pack service] ++ request
+    when (verbose api) $ do
+        putStrLn $ "I: Send request to " ++ service ++ " service:"
+        dumpMsg wrappedRequest 
+   
+    trySend (client api) wrappedRequest
+  where trySend :: Socket Req -> Message -> IO Message
+        trySend clientSock wrappedRequest = do
+            sendMulti clientSock (N.fromList wrappedRequest)
+
+            [evts] <- poll (fromInteger $ timeout api) [Sock clientSock [In] Nothing] 
+            if In `elem` evts
+            then do
+                msg <- receiveMulti clientSock
+                when (verbose api) $ do
+                    putStrLn "I: received reply"
+                    dumpMsg msg
+
+                when (length msg < 3) $ do
+                    putStrLn "E: Malformed message"
+                    dumpMsg msg
+                    error ""
+
+                let (header, msg') = z_pop msg
+                    (reply_service, msg'') = z_pop msg'
+                when (header /= mdpcClient) $
+                    error $ "E: Malformed header '" ++ (unpack header) ++ "'"
+                when ((unpack reply_service) /= service) $
+                    error $ "E: Malformed service '" ++ (unpack reply_service) ++ "'"
+
+                return msg''
+            else
+                if retries api > 0
+                then do
+                    when (verbose api) $ putStrLn "W: No reply, reconnecting..."
+                    newAPI <- mdConnectToBroker api
+                    mdSend (newAPI { retries = ((retries api)-1) }) service (drop 2 wrappedRequest)
+                else do 
+                    when (verbose api) $ putStrLn "W: Permanent error, abandoning"
+                    error ""
+
 
 {-
-    @pre initialized context
-    @post newly created client socket for the API 
+    Private API
 -}
 mdConnectToBroker :: ClientAPI -> IO ClientAPI
 mdConnectToBroker api = do
@@ -50,10 +105,6 @@ mdConnectToBroker api = do
         putStrLn $ "I: connecting to broker at " ++ (broker api)
     return api { client = reconnectedClient }
 
-{-
-    @pre valid broker ip address with port
-    @post initialized API with connected socket to the broker
--}
 mdInit :: String -> Bool -> IO ClientAPI
 mdInit broker verbose = do
     ctx <- context
@@ -67,80 +118,7 @@ mdInit broker verbose = do
                            }
     mdConnectToBroker newAPI
 
-{-
-    @pre initialized context
-    @post an API _without a created context_ and _closed sockets_
--}
 mdDestroy :: ClientAPI -> IO ()
 mdDestroy api = do
     close (client api)
     shutdown (ctx api)
-
-{-
-    @pre initialized API
-    @post new API with different timeout
--}
-mdSetTimeout :: ClientAPI -> Integer -> IO ClientAPI
-mdSetTimeout api newTimeout = return api { timeout = newTimeout }
-
-{-
-    @pre initialized API
-    @post new API with different retry count
--}
-mdSetRetries :: ClientAPI -> Int -> IO ClientAPI
-mdSetRetries api newRetries = return api { retries = newRetries }
-
-{-
-    @brief Sends a request and retries until it can
-    @pre initialized API
-    @post API with a possibly restarted socket
--}
-mdSend :: ClientAPI -> String -> [ByteString] -> IO [ByteString]
-mdSend api service request = do
-    -- Protocol frames
-    -- Frame 1: "MDPCxy" (six bytes, MDP/Client x.y)
-    -- Frame 2: Service name (printable string)
-    let wrappedRequest = [pack mdpcClient, pack service] ++ request
-    when (verbose api) $ do
-        putStrLn $ "I: Send request to " ++ service ++ " service:"
-        mapM_ (putStrLn . unpack) wrappedRequest 
-   
-    trySend (client api) wrappedRequest
-  where trySend :: Socket Req -> [ByteString] -> IO [ByteString]
-        trySend clientSock wrappedRequest = do
-            sendMulti clientSock (N.fromList wrappedRequest)
-
-            [evts] <- poll (fromInteger $ timeout api) [Sock clientSock [In] Nothing] 
-            if In `elem` evts
-            then do
-                msg <- receiveMulti clientSock
-                when (verbose api) $ do
-                    putStrLn "I: received reply"
-                    mapM_ (putStrLn . unpack) msg
-
-                when (length msg < 3) $ do
-                    putStrLn "E: Malformed message"
-                    mapM_ (putStrLn . unpack) msg
-                    error ""
-
-                let header = unpack $ msg !! 0
-                    reply_service = unpack $ msg !! 1
-                when (header /= mdpcClient) $ do
-                    putStrLn "E: Malformed message"
-                    mapM_ (putStrLn . unpack) msg
-                    error ""
-                when (reply_service /= service) $ do
-                    putStrLn "E: Malformed message"
-                    mapM_ (putStrLn . unpack) msg
-                    error ""
-
-                return $ drop 2 msg
-            else
-                if retries api > 0
-                then do
-                    when (verbose api) $ putStrLn "W: No reply, reconnecting..."
-                    newAPI <- mdConnectToBroker api
-                    mdSend (newAPI { retries = ((retries api)-1) }) service (drop 2 wrappedRequest)
-                else do 
-                    when (verbose api) $ putStrLn "W: Permanent error, abandoning"
-                    error ""
