@@ -11,7 +11,7 @@ import Control.Exception (bracket)
 import Control.Monad (forever, forM_, mapM_, foldM, when)
 import Data.Maybe (catMaybes, maybeToList, fromJust, isJust)
 import qualified Data.ByteString.Char8 as B
-import qualified Data.Map.Strict as M
+import qualified Data.Map.Strict as M -- TODO: Why strict?
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as N
 
@@ -39,7 +39,7 @@ data Service = Service {
 
 data Worker = Worker {
       wId :: B.ByteString
-    , identityFrame :: [B.ByteString]
+    , identityFrame :: Frame
     , expiry :: Integer
     } deriving (Eq)
 
@@ -82,7 +82,7 @@ s_brokerWorkerMsg broker senderFrame msg = do
     when (L.length msg < 1) $ do
         error "E: Too little frames in message for worker"
 
-    let (cmdFrame, msg') = pop msg
+    let (cmdFrame, msg') = z_pop msg
         id_string = senderFrame -- TODO: base16 encode this
         isWorkerReady = M.member id_string (workers broker)
         (worker, newBroker) = s_workerRequire broker senderFrame
@@ -92,23 +92,23 @@ s_brokerWorkerMsg broker senderFrame msg = do
                 -- Not first cmd in session or reserved service frame.
                 if isWorkerReady || (B.pack "mmi.") `B.isPrefixOf` senderFrame
                 then do
-                    s_workerSendDisconnect broker worker
-                    return $ s_brokerDeleteWorker broker worker
+                    s_workerSendDisconnect newBroker worker
+                    return $ s_brokerDeleteWorker newBroker worker
                 else do
-                    let (serviceFrame, _) = pop msg'
-                        (service, newBroker) = s_serviceRequire broker serviceFrame
+                    let (serviceFrame, _) = z_pop msg'
+                        (service, newBroker') = s_serviceRequire newBroker serviceFrame
                         newService = service { workersCount = workersCount service + 1 }
-                    (newBroker', newService') <- s_workerWaiting newBroker newService worker
-                    return newBroker' { services = M.insert (name newService') newService' (services newBroker') }
+                    newBroker'' <- s_workerWaiting newBroker' newService worker
+                    return newBroker''
             | cmd == mdpwReply ->
                   if isWorkerReady 
                   then do
-                      let (client, msg'') = pop msg'
+                      let (client, msg'') = z_pop msg'
                           wkrService = s_brokerGetServiceFor worker newBroker
-                          finalMsg = wrap (mdpcClient : name wkrService : msg'') client
+                          finalMsg = z_wrap (mdpcClient : name wkrService : msg'') client
                       sendMulti (bSocket newBroker) (N.fromList finalMsg)
-                      (newBroker', newService') <- s_workerWaiting newBroker wkrService worker
-                      return newBroker' { services = M.insert (name newService') newService'  (services newBroker') }
+                      newBroker' <- s_workerWaiting newBroker wkrService worker
+                      return newBroker'
                   else do
                       s_workerSendDisconnect broker worker 
                       return $ s_brokerDeleteWorker broker worker
@@ -129,24 +129,23 @@ s_brokerWorkerMsg broker senderFrame msg = do
                   return newBroker
 
 -- Process a request coming from a client.
--- TODO: Add modified service to broker!
-s_brokerClientMsg :: Broker -> Frame -> Message -> IO (Broker, Service)
+s_brokerClientMsg :: Broker -> Frame -> Message -> IO Broker
 s_brokerClientMsg broker senderFrame msg = do
     when (L.length msg < 2) $ do
         error "E: Too little frames in message for client"
 
-    let (serviceFrame, msg') = pop msg
+    let (serviceFrame, msg') = z_pop msg
         (service, newBroker) = s_serviceRequire broker serviceFrame
-        msg'' = wrap msg' senderFrame
+        msg'' = z_wrap msg' senderFrame
 
     if (B.pack "mmi.") `B.isPrefixOf` serviceFrame
     then do
         let returnCode = B.pack $ checkService service serviceFrame msg''
             returnMsg = L.init msg'' ++ [returnCode]
-            (client, msg''') = pop msg''
-            finalMsg = wrap (mdpcClient : serviceFrame : msg''') client
+            (client, msg''') = z_pop returnMsg
+            finalMsg = z_wrap (mdpcClient : serviceFrame : msg''') client
         sendMulti (bSocket newBroker) (N.fromList finalMsg)
-        return (newBroker, service)
+        return newBroker
     else s_serviceDispatch newBroker service (Just msg'')
 
   where checkService service serviceFrame msg =
@@ -160,14 +159,15 @@ s_brokerClientMsg broker senderFrame msg = do
 
 s_brokerDeleteWorker :: Broker -> Worker -> Broker
 s_brokerDeleteWorker broker worker = 
-    let purgedServices = M.map purgeWorker (services broker)
+    let purgedServices = M.map purgeWorker (services broker) -- TODO: Use s_brokerGetServiceFor
     in  broker { bWaiting = L.delete worker (bWaiting broker)
                , workers = M.delete (wId worker) (workers broker) 
-               , services = purgedServices}
+               , services = purgedServices }
   where purgeWorker service = 
             service { sWaiting = L.delete worker (sWaiting service)
                     , workersCount = workersCount service - 1 }
     
+-- Removes expired workers from the broker and its services
 s_brokerPurge :: Broker -> IO Broker
 s_brokerPurge broker = do
     currTime <- currentTime_ms
@@ -175,22 +175,21 @@ s_brokerPurge broker = do
                                  (bWaiting broker)
         leftInMap       = M.filterWithKey (isNotPurgedKey toPurge) (workers broker)
         purgedServices  = purgeWorkersFromServices toPurge (services broker)
-    mapM_ (s_workerSendDisconnect broker) toPurge
     return broker { bWaiting = rest 
                   , workers = leftInMap 
                   , services = purgedServices
                   }
   where isNotPurgedKey toPurge key _ = 
             key `notElem` (map wId toPurge)
+        purgeWorkersFromServices workers = M.map (purge workers)
+        purge workers service =
+            let (toPurge, rest) = L.partition (\worker -> worker `elem` workers)
+                                              (sWaiting service)
+            in  service { sWaiting = rest
+                        , workersCount = (workersCount service) - (length toPurge)
+                        }
 
-        purgeWorkersFromServices workers = M.map purge
-          where purge service =
-                    let (toPurge, rest) = L.partition (\worker -> worker `elem` workers)
-                                                      (sWaiting service)
-                    in  service { sWaiting = rest
-                                , workersCount = (workersCount service) - (length toPurge)
-                                }
-
+-- Gets the service in which the worker is contained
 s_brokerGetServiceFor :: Worker -> Broker -> Service
 s_brokerGetServiceFor worker broker =
     snd . head . M.toList $ M.filter containsWorker (services broker)
@@ -203,11 +202,11 @@ s_brokerGetServiceFor worker broker =
 s_serviceRequire :: Broker -> Frame -> (Service, Broker)
 s_serviceRequire broker serviceFrame =
     let foundService = M.lookup serviceFrame (services broker)
-    in case foundService of
+    in  case foundService of
             Nothing -> createNewService
             Just fs -> (fs, broker)
   where createNewService =
-            let newService = Service { name = serviceFrame -- TODO: base16 encode this
+            let newService = Service { name = serviceFrame
                                      , requests = []
                                      , sWaiting = []
                                      , workersCount = 0
@@ -215,8 +214,8 @@ s_serviceRequire broker serviceFrame =
             in (newService
                , broker { services = M.insert (name newService) newService (services broker) })
 
--- TODO: Add modified service to broker!
-s_serviceDispatch :: Broker -> Service -> Maybe Message -> IO (Broker, Service)
+-- Dispatch queued messages from workers
+s_serviceDispatch :: Broker -> Service -> Maybe Message -> IO Broker
 s_serviceDispatch broker service msg = do
     purgedBroker <- s_brokerPurge broker
     let workersWithMessages = zip (sWaiting service) (requests service)
@@ -224,22 +223,23 @@ s_serviceDispatch broker service msg = do
         rqsToRemain = filter (\rq -> rq `notElem` (map snd workersWithMessages)) (requests service)
     forM_ workersWithMessages $ \wkrMsg -> do
         s_workerSend broker (fst wkrMsg) mdpwRequest Nothing (Just $ [snd wkrMsg])
-    return ( purgedBroker { bWaiting = wkrsToRemain }
-           , service { requests = rqsToRemain })
+    return ( purgedBroker { bWaiting = wkrsToRemain 
+                          , services = M.insert (name service) (service { requests = rqsToRemain}) (services broker) }
+           )
     
 
 -- Worker functions
 
--- Inserts a new worker in the broker's workers.
+-- Inserts a new worker in the broker's workers if that worker didn't exist.
 s_workerRequire :: Broker -> Frame -> (Worker, Broker)
 s_workerRequire broker identity =
-    let foundWorker = M.lookup identity (workers broker)
+    let foundWorker = M.lookup identity (workers broker) -- TODO: use base16 encoded identity
     in  case foundWorker of
             Nothing -> createNewWorker
             Just fw -> (fw, broker)
   where createNewWorker =
             let newWorker = Worker { wId = identity -- TODO: base16 encode this
-                                   , identityFrame = [identity]
+                                   , identityFrame = identity
                                    , expiry = 0 -- The caller should modify it.
                                    }
             in  (newWorker
@@ -249,23 +249,26 @@ s_workerSendDisconnect :: Broker -> Worker -> IO ()
 s_workerSendDisconnect broker worker =
     s_workerSend broker worker mdpwDisconnect Nothing Nothing
 
+-- Sends a message to the client
 s_workerSend :: Broker -> Worker -> Frame -> Maybe Frame -> Maybe Message -> IO ()
 s_workerSend broker worker cmd option msg = do
-    let msgOpts = [option, Just cmd, Just mdpwWorker]
-        msgFinal = wId worker : (concat . maybeToList $ msg) ++ (catMaybes msgOpts)
+    let msgOpts = [Just mdpwWorker, Just cmd, option]
+        msgFinal = (catMaybes msgOpts) ++ (concat . maybeToList $ msg)
+        msgWithId = z_wrap msgFinal (wId worker)
     when (verbose broker) $ do
-        putStrLn $ "I: sending " ++ (B.unpack $ mdpsCommands !! mdpGetIdx (B.unpack cmd)) ++ " to worker"
-        dumpMsg msgFinal
+        putStrLn $ "I: sending '" ++ (B.unpack $ mdpsCommands !! mdpGetIdx (B.unpack cmd)) ++ "' to worker"
+        dumpMsg msgWithId
 
-    sendMulti (bSocket broker) (N.fromList msgFinal)
+    sendMulti (bSocket broker) (N.fromList msgWithId)
 
--- TODO: Add modified service to broker
-s_workerWaiting :: Broker -> Service -> Worker -> IO (Broker, Service)
+-- Adds a worker to the waiting lists
+s_workerWaiting :: Broker -> Service -> Worker -> IO Broker
 s_workerWaiting broker wService worker = do
     currTime <- currentTime_ms
     let newWorker = worker { expiry = currTime + heartbeatExpiry }
         newService = wService { sWaiting = newWorker : sWaiting wService }
-        newBroker = broker { bWaiting = newWorker : bWaiting broker }
+        newBroker = broker { bWaiting = newWorker : bWaiting broker
+                           , services = M.insert (name newService) newService (services broker) }
     s_serviceDispatch newBroker newService Nothing
 
 
@@ -287,12 +290,12 @@ main =
                     putStrLn "I: Received message: "
                     dumpMsg msg
 
-                let (sender, msg') = pop msg
-                    (empty, msg'') = pop msg'
-                    (header, finalMsg) = pop msg''
+                let (sender, msg') = z_pop msg
+                    (empty, msg'') = z_pop msg'
+                    (header, finalMsg) = z_pop msg''
                 case header of
                     head | head == mdpcClient -> do 
-                                (newBroker, newService) <- s_brokerClientMsg broker sender finalMsg
+                                newBroker <- s_brokerClientMsg broker sender finalMsg
                                 process newBroker
                          | head == mdpwWorker -> do
                                 newBroker <- s_brokerWorkerMsg broker sender finalMsg  
