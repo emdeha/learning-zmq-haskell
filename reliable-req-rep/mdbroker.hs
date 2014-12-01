@@ -226,7 +226,7 @@ s_serviceDispatch broker service msg = do
     return ( purgedBroker { bWaiting = wkrsToRemain 
                           , services = M.insert (name service) (service { requests = rqsToRemain}) (services broker) }
            )
-    
+
 
 -- Worker functions
 
