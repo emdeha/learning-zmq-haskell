@@ -74,6 +74,13 @@ nextHeartbeatTime_ms heartbeatInterval_ms = do
 z_wrap :: Message -> Frame -> Message
 z_wrap msg frame = frame : B.empty : msg
 
+-- Pop frame and empty frame if follows
+z_unwrap :: Message -> (Frame, Message)
+z_unwrap msg = 
+    let (frame, msg') = z_pop msg
+        (_, msg'') = z_pop msg'
+    in  (frame, msg'')
+
 -- Push frame before all frames
 z_push :: Message -> Frame -> Message
 z_push msg frame = frame : msg

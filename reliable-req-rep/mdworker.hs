@@ -14,5 +14,8 @@ main = do
         doEcho session [empty]
       where doEcho session reply = do
                 request <- mdwkrExchange session reply
+                putStrLn "''''''''''''''''''"
+                putStrLn "Received request: "
                 dumpMsg (snd request)
+                putStrLn "''''''''''''''''''"
                 doEcho (fst request) (snd request)

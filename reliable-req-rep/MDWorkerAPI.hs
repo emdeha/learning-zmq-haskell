@@ -72,7 +72,8 @@ mdwkrInit broker service verbose = do
 -- Send reply to broker and wait for request
 mdwkrExchange :: WorkerAPI -> Message -> IO (WorkerAPI, Message)
 mdwkrExchange api reply = do
-    s_mdwkrSendToBroker api mdpwReply Nothing (Just $ z_wrap reply (reply_to api)) 
+    when (reply /= [empty]) $ 
+        s_mdwkrSendToBroker api mdpwReply Nothing (Just $ z_wrap reply (reply_to api)) 
 
     tryExchange api { expect_reply = True }
   where tryExchange :: WorkerAPI -> IO (WorkerAPI, Message)
@@ -87,7 +88,7 @@ mdwkrExchange api reply = do
                     putStrLn $ "I: Received message from broker: "
                     dumpMsg msg
                 
-                when (length msg <= 3) $
+                when (length msg < 3) $
                     error "E: Invalid message format"
 
                 let (empty_, msg') = z_pop msg
@@ -100,11 +101,11 @@ mdwkrExchange api reply = do
                     error "E: Not a valid MDP header"
 
                 case command of
-                    cmd | cmd == mdpwRequest -> return (api { reply_to = fst . z_pop $ msg 
+                    cmd | cmd == mdpwRequest -> return (api { reply_to = fst . z_unwrap $ msg'''
                                                             , liveness = heartbeatLiveness
                                                             , expect_reply = True
                                                             }, 
-                                                        msg)
+                                                        msg''')
                         | cmd == mdpwDisconnect -> do
                               newAPI <- s_mdwkrConnectToBroker $ api { liveness = heartbeatLiveness
                                                                      , expect_reply = True }
@@ -159,7 +160,7 @@ mdwkrDestroy api = do
 -- Wraps a message with the appropriate MDP data and sends it to the broker
 s_mdwkrSendToBroker :: WorkerAPI -> Frame -> Maybe Frame -> Maybe Message -> IO ()
 s_mdwkrSendToBroker api command option msg = do
-    let args = [option, Just command, Just mdpwWorker, Just empty]
+    let args = [Just empty, Just mdpwWorker, Just command, option]
         msg' = fromMaybe [] msg
         wrappedMessage = (catMaybes args) ++ msg'
     when (verbose api) $ do
