@@ -10,8 +10,9 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Exception (bracket)
 import Control.Monad (forever, forM_, mapM_, foldM, when)
 import Data.Maybe (catMaybes, maybeToList, fromJust, isJust)
+import Data.IORef
 import qualified Data.ByteString.Char8 as B
-import qualified Data.Map.Strict as M -- TODO: Why strict?
+import qualified Data.Map as M
 import qualified Data.List as L
 import qualified Data.List.NonEmpty as N
 
@@ -147,7 +148,6 @@ s_brokerClientMsg broker senderFrame msg = do
         sendMulti (bSocket newBroker) (N.fromList finalMsg)
         return newBroker
     else do 
-        putStrLn $ "Trying to send msg to worker '" ++ (B.unpack serviceFrame) ++ "'"
         s_serviceDispatch newBroker service (Just msg'')
 
   where checkService service serviceFrame msg =
@@ -224,8 +224,6 @@ s_serviceDispatch broker service msg = do
         wkrsToRemain = filter (\wkr -> wkr `notElem` (map fst workersWithMessages)) (bWaiting broker)
         rqsToRemain = filter (\rq -> rq `notElem` (map snd workersWithMessages)) (requests newService)
     forM_ workersWithMessages $ \wkrMsg -> do
-        putStrLn $ "Sending to worker"
-        dumpMsg $ snd wkrMsg
         s_workerSend broker (fst wkrMsg) mdpwRequest Nothing (Just $ snd wkrMsg)
     return ( purgedBroker { bWaiting = wkrsToRemain 
                           , services = M.insert (name newService) (newService { requests = rqsToRemain}) (services broker) }
@@ -248,7 +246,7 @@ s_workerRequire broker identity =
   where createNewWorker =
             let newWorker = Worker { wId = identity -- TODO: base16 encode this
                                    , identityFrame = identity
-                                   , expiry = 0 -- The caller should modify it.
+                                   , expiry = 0
                                    }
             in  (newWorker
                 , broker { workers = M.insert (wId newWorker) newWorker (workers broker) })
@@ -283,11 +281,18 @@ s_workerWaiting broker wService worker = do
 -- Main. Create a new broker and process messages on its socket.
 main :: IO ()
 main = 
-    withBroker True $ \broker -> do
+    withBroker False $ \broker -> do
         s_brokerBind broker "tcp://*:5555"
 
-        process broker
-      where process broker = do
+        cnt <- newIORef 0
+        endIn <- currentTime_ms
+        process broker cnt (endIn + 14 * 1000)
+      where process broker cnt endIn = do
+            currTime <- currentTime_ms
+            when (currTime > endIn) $ do
+                readCnt <- readIORef cnt
+                error $ "Did " ++ (show readCnt) ++ " rqs in 14 secs"
+
             [evts] <- poll (fromInteger $ heartbeatInterval) 
                            [Sock (bSocket broker) [In] Nothing]
 
@@ -297,6 +302,7 @@ main =
                 when (verbose broker) $ do
                     putStrLn "I: Received message: "
                     dumpMsg msg
+                modifyIORef' cnt (+1)
 
                 let (sender, msg') = z_pop msg
                     (empty, msg'') = z_pop msg'
@@ -304,20 +310,20 @@ main =
                 case header of
                     head | head == mdpcClient -> do 
                                 newBroker <- s_brokerClientMsg broker sender finalMsg
-                                process newBroker
+                                process newBroker cnt endIn
                          | head == mdpwWorker -> do
                                 newBroker <- s_brokerWorkerMsg broker sender finalMsg  
-                                process newBroker
+                                process newBroker cnt endIn
                          | otherwise -> do
                                 putStrLn $ "E: Invalid message: " ++ (B.unpack head)
                                 dumpMsg finalMsg
-                                process broker
+                                process broker cnt endIn
             
             currTime <- currentTime_ms
             when (currTime > heartbeatAt broker) $ do
                 newBroker <- s_brokerPurge broker
                 mapM_ (\worker -> s_workerSend newBroker worker mdpwHeartbeat Nothing Nothing) (bWaiting broker)
-                -- TODO: Fetch currTime again
-                process $ newBroker { heartbeatAt = currTime + heartbeatInterval }
+                currTime <- currentTime_ms
+                process newBroker { heartbeatAt = currTime + heartbeatInterval } cnt endIn
 
-            process broker
+            process broker cnt endIn
