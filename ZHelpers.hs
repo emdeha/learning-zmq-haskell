@@ -61,6 +61,11 @@ currentTime_ms = do
     time_secs <- (read <$> formatTime defaultTimeLocale "%s" <$> getCurrentTime) :: IO Integer
     return $ time_secs * 1000
 
+timeElapsed_ms :: Integer -> IO Integer
+timeElapsed_ms start = do
+    end <- currentTime_ms
+    return $ end - start
+
 nextHeartbeatTime_ms :: Integer -> IO Integer
 nextHeartbeatTime_ms heartbeatInterval_ms = do
     currTime <- currentTime_ms

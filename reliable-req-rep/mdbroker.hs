@@ -10,7 +10,6 @@ import Control.Monad.IO.Class (liftIO)
 import Control.Exception (bracket)
 import Control.Monad (forever, forM_, mapM_, foldM, when)
 import Data.Maybe (catMaybes, maybeToList, fromJust, isJust)
-import Data.IORef
 import qualified Data.ByteString.Char8 as B
 import qualified Data.Map as M
 import qualified Data.List as L
@@ -284,15 +283,8 @@ main =
     withBroker False $ \broker -> do
         s_brokerBind broker "tcp://*:5555"
 
-        cnt <- newIORef 0
-        endIn <- currentTime_ms
-        process broker cnt (endIn + 14 * 1000)
-      where process broker cnt endIn = do
-            currTime <- currentTime_ms
-            when (currTime > endIn) $ do
-                readCnt <- readIORef cnt
-                error $ "Did " ++ (show readCnt) ++ " rqs in 14 secs"
-
+        process broker
+      where process broker = do
             [evts] <- poll (fromInteger $ heartbeatInterval) 
                            [Sock (bSocket broker) [In] Nothing]
 
@@ -302,7 +294,6 @@ main =
                 when (verbose broker) $ do
                     putStrLn "I: Received message: "
                     dumpMsg msg
-                modifyIORef' cnt (+1)
 
                 let (sender, msg') = z_pop msg
                     (empty, msg'') = z_pop msg'
@@ -310,20 +301,20 @@ main =
                 case header of
                     head | head == mdpcClient -> do 
                                 newBroker <- s_brokerClientMsg broker sender finalMsg
-                                process newBroker cnt endIn
+                                process newBroker
                          | head == mdpwWorker -> do
                                 newBroker <- s_brokerWorkerMsg broker sender finalMsg  
-                                process newBroker cnt endIn
+                                process newBroker
                          | otherwise -> do
                                 putStrLn $ "E: Invalid message: " ++ (B.unpack head)
                                 dumpMsg finalMsg
-                                process broker cnt endIn
+                                process broker
             
             currTime <- currentTime_ms
             when (currTime > heartbeatAt broker) $ do
                 newBroker <- s_brokerPurge broker
                 mapM_ (\worker -> s_workerSend newBroker worker mdpwHeartbeat Nothing Nothing) (bWaiting broker)
                 currTime <- currentTime_ms
-                process newBroker { heartbeatAt = currTime + heartbeatInterval } cnt endIn
+                process newBroker { heartbeatAt = currTime + heartbeatInterval }
 
-            process broker cnt endIn
+            process broker
