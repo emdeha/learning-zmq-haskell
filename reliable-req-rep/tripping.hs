@@ -39,13 +39,23 @@ clientTask ctx pipe =
 
 worker_task :: IO ()
 worker_task = 
-    withContext $ \ctx -> do
+    withContext $ \ctx ->
         withSocket ctx Dealer $ \worker -> do
             connect worker "tcp://localhost:5556"
 
             forever $ do
                 msg <- receive worker
                 send worker [] msg
+
+broker_task :: IO ()
+broker_task =
+    withContext $ \ctx ->
+        withSocket ctx Dealer $ \frontend ->
+        withSocket ctx Dealer $ \backend -> do
+            bind frontend "tcp://*:5555"
+            bind backend "tcp://*:5556"
+
+            proxy frontend backend Nothing
 
 main :: IO ()
 main = undefined
