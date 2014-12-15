@@ -4,12 +4,11 @@
     The client task signals to main when it's ready.
 -}
 import System.ZMQ4
-import ZHelpers 
 
 import Control.Concurrent
 import Control.Monad (forM_, forever)
 import Data.ByteString.Char8 (pack, unpack)
-import Data.Time.Clock
+import Data.Time.Clock (getCurrentTime, diffUTCTime)
 
 
 client_task :: Context -> Socket Pair -> IO ()
