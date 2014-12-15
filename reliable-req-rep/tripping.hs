@@ -8,32 +8,35 @@ import ZHelpers
 
 import Control.Concurrent
 import Control.Monad (forM_, forever)
-import Data.ByteString.Char8 (pack)
+import Data.ByteString.Char8 (pack, unpack)
+import Data.Time.Clock
 
 
-clientTask :: Context -> Socket Req -> IO ()
-clientTask ctx pipe =
+client_task :: Context -> Socket Pair -> IO ()
+client_task ctx pipe =
     withSocket ctx Dealer $ \client -> do
         connect client "tcp://localhost:5555"
         putStrLn "Setting up test..."
         threadDelay $ 100 * 1000
 
         putStrLn "Synchronous round-trip test..."
-        start <- currentTime_ms
+        start <- getCurrentTime--currentTime_ms
         forM_ [0..10000] $ \_ -> do
             send client [] (pack "hello")
             receive client
-        elapsed_ms <- timeElapsed_ms start
-        putStrLn $ " " ++ (show $ (1000 * 10000) / (fromInteger elapsed_ms)) ++ " calls/second"
+        end <- getCurrentTime
+        let elapsed_ms = (diffUTCTime end start) * 1000
+        putStrLn $ " " ++ (show $ (1000 * 10000) `quot` (round elapsed_ms)) ++ " calls/second"
 
         putStrLn "Asynchronous round-trip test..."
-        start <- currentTime_ms
+        start <- getCurrentTime
         forM_ [0..10000] $ \_ -> do
             send client [] (pack "hello")
         forM_ [0..10000] $ \_ -> do
             receive client
-        elapsed_ms <- timeElapsed_ms start
-        putStrLn $ " " ++ (show $ (1000 * 10000) / (fromInteger elapsed_ms)) ++ " calls/second"
+        end <- getCurrentTime
+        let elapsed_ms = (diffUTCTime end start) * 1000
+        putStrLn $ " " ++ (show $ (1000 * 10000) `quot` (round elapsed_ms)) ++ " calls/second"
 
         send pipe [] (pack "done")
 
@@ -58,4 +61,16 @@ broker_task =
             proxy frontend backend Nothing
 
 main :: IO ()
-main = undefined
+main =
+    withContext $ \ctx ->
+        withSocket ctx Pair $ \pipeServer ->
+        withSocket ctx Pair $ \pipeClient -> do
+            bind pipeServer "inproc://my-pipe"
+            connect pipeClient "inproc://my-pipe"
+
+            forkIO (client_task ctx pipeClient)
+            forkIO worker_task
+            forkIO broker_task
+
+            signal <- receive pipeServer
+            putStrLn $ unpack signal
