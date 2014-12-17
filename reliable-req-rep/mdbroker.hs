@@ -5,6 +5,7 @@ import System.ZMQ4
 import ZHelpers
 import MDPDef
 
+import System.Environment
 import Control.Monad.Trans.State
 import Control.Monad.IO.Class (liftIO)
 import Control.Exception (bracket)
@@ -279,8 +280,13 @@ s_workerWaiting broker wService worker = do
 
 -- Main. Create a new broker and process messages on its socket.
 main :: IO ()
-main = 
-    withBroker False $ \broker -> do
+main = do
+    args <- getArgs
+    when (length args /= 1) $
+        error "usage: mdbroker <isVerbose(True|False)>"
+    let isVerbose = read (args !! 0) :: Bool
+
+    withBroker isVerbose $ \broker -> do
         s_brokerBind broker "tcp://*:5555"
 
         process broker
