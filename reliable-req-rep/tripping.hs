@@ -19,7 +19,7 @@ client_task ctx pipe =
         threadDelay $ 100 * 1000
 
         putStrLn "Synchronous round-trip test..."
-        start <- getCurrentTime--currentTime_ms
+        start <- getCurrentTime
         forM_ [0..10000] $ \_ -> do
             send client [] (pack "hello")
             receive client

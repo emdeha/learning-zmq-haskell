@@ -1,16 +1,18 @@
 {-
     Majordomo Protocol Broker
 -}
+module Main where
+
 import System.ZMQ4
 import ZHelpers
 import MDPDef
 
 import System.Environment
-import Control.Monad.Trans.State
-import Control.Monad.IO.Class (liftIO)
+import System.Exit
 import Control.Exception (bracket)
 import Control.Monad (forever, forM_, mapM_, foldM, when)
 import Data.Maybe (catMaybes, maybeToList, fromJust, isJust)
+
 import qualified Data.ByteString.Char8 as B
 import qualified Data.Map as M
 import qualified Data.List as L
@@ -40,6 +42,7 @@ data Service = Service {
 
 data Worker = Worker {
       wId :: B.ByteString
+    , serviceName :: B.ByteString
     , identityFrame :: Frame
     , expiry :: Integer
     } deriving (Eq)
@@ -84,9 +87,9 @@ s_brokerWorkerMsg broker senderFrame msg = do
         error "E: Too little frames in message for worker"
 
     let (cmdFrame, msg') = z_pop msg
-        id_string = senderFrame -- TODO: base16 encode this
+        id_string = senderFrame
         isWorkerReady = M.member id_string (workers broker)
-        (worker, newBroker) = s_workerRequire broker senderFrame
+        (worker, newBroker) = s_workerRequire broker id_string
 
     case cmdFrame of
         cmd | cmd == mdpwReady -> 
@@ -99,20 +102,18 @@ s_brokerWorkerMsg broker senderFrame msg = do
                     let (serviceFrame, _) = z_pop msg'
                         (service, newBroker') = s_serviceRequire newBroker serviceFrame
                         newService = service { workersCount = workersCount service + 1 }
-                    newBroker'' <- s_workerWaiting newBroker' newService worker
-                    return newBroker''
+                    s_workerWaiting newBroker' newService worker
             | cmd == mdpwReply ->
                   if isWorkerReady 
                   then do
                       let (client, msg'') = z_unwrap msg'
-                          wkrService = s_brokerGetServiceFor worker newBroker
-                          finalMsg = z_wrap (mdpcClient : name wkrService : msg'') client
+                          finalMsg = z_wrap (mdpcClient : serviceName worker : msg'') client
+                          wkrService = (services broker) M.! (serviceName worker)
                       sendMulti (bSocket newBroker) (N.fromList finalMsg)
-                      newBroker' <- s_workerWaiting newBroker wkrService worker
-                      return newBroker'
+                      s_workerWaiting newBroker wkrService worker
                   else do
-                      s_workerSendDisconnect broker worker 
-                      return $ s_brokerDeleteWorker broker worker
+                      s_workerSendDisconnect newBroker worker 
+                      return $ s_brokerDeleteWorker newBroker worker
             | cmd == mdpwHeartbeat ->
                   if isWorkerReady
                   then do
@@ -120,10 +121,10 @@ s_brokerWorkerMsg broker senderFrame msg = do
                       let newWorker = worker { expiry = currTime + heartbeatExpiry }
                       return newBroker { workers = M.insert (wId newWorker) newWorker (workers newBroker) }
                   else do 
-                      s_workerSendDisconnect broker worker 
-                      return $ s_brokerDeleteWorker broker worker
+                      s_workerSendDisconnect newBroker worker 
+                      return $ s_brokerDeleteWorker newBroker worker
             | cmd == mdpwDisconnect ->
-                  return $ s_brokerDeleteWorker broker worker
+                  return $ s_brokerDeleteWorker newBroker worker
             | otherwise -> do
                   putStrLn $ "E: Invalid input message " ++ (B.unpack cmd)
                   dumpMsg msg'
@@ -161,19 +162,19 @@ s_brokerClientMsg broker senderFrame msg = do
 
 s_brokerDeleteWorker :: Broker -> Worker -> Broker
 s_brokerDeleteWorker broker worker = 
-    let purgedServices = M.map purgeWorker (services broker) -- TODO: Use s_brokerGetServiceFor
+    let purgedServices = M.map purgeWorker (services broker)
     in  broker { bWaiting = L.delete worker (bWaiting broker)
                , workers = M.delete (wId worker) (workers broker) 
                , services = purgedServices }
   where purgeWorker service = 
             service { sWaiting = L.delete worker (sWaiting service)
                     , workersCount = workersCount service - 1 }
-    
+
 -- Removes expired workers from the broker and its services
 s_brokerPurge :: Broker -> IO Broker
 s_brokerPurge broker = do
     currTime <- currentTime_ms
-    let (toPurge, rest) = L.span (\worker -> currTime > expiry worker)
+    let (toPurge, rest) = L.span (\worker -> currTime >= expiry worker)
                                  (bWaiting broker)
         leftInMap       = M.filterWithKey (isNotPurgedKey toPurge) (workers broker)
         purgedServices  = purgeWorkersFromServices toPurge (services broker)
@@ -190,12 +191,6 @@ s_brokerPurge broker = do
             in  service { sWaiting = rest
                         , workersCount = (workersCount service) - (length toPurge)
                         }
-
--- Gets the service in which the worker is contained
-s_brokerGetServiceFor :: Worker -> Broker -> Service
-s_brokerGetServiceFor worker broker =
-    snd . head . M.toList $ M.filter containsWorker (services broker)
-  where containsWorker service = isJust $ L.find (\wkr -> wId wkr == wId worker) (sWaiting service)
 
 
 -- Service functions
@@ -221,12 +216,16 @@ s_serviceDispatch :: Broker -> Service -> Maybe Message -> IO Broker
 s_serviceDispatch broker service msg = do
     purgedBroker <- s_brokerPurge broker
     let workersWithMessages = zip (sWaiting newService) (requests newService)
-        wkrsToRemain = filter (\wkr -> wkr `notElem` (map fst workersWithMessages)) (bWaiting broker)
+        wkrsToRemain = filter (\wkr -> wkr `notElem` (map fst workersWithMessages)) (bWaiting purgedBroker)
         rqsToRemain = filter (\rq -> rq `notElem` (map snd workersWithMessages)) (requests newService)
     forM_ workersWithMessages $ \wkrMsg -> do
-        s_workerSend broker (fst wkrMsg) mdpwRequest Nothing (Just $ snd wkrMsg)
+        s_workerSend purgedBroker (fst wkrMsg) mdpwRequest Nothing (Just $ snd wkrMsg)
     return ( purgedBroker { bWaiting = wkrsToRemain 
-                          , services = M.insert (name newService) (newService { requests = rqsToRemain}) (services broker) }
+                          , services = M.insert (name newService) 
+                                                (newService { requests = rqsToRemain
+                                                            , sWaiting = wkrsToRemain
+                                                            , workersCount = length wkrsToRemain }) 
+                                                (services purgedBroker) }
            )
   where newService = 
             if isJust msg
@@ -239,12 +238,13 @@ s_serviceDispatch broker service msg = do
 -- Inserts a new worker in the broker's workers if that worker didn't exist.
 s_workerRequire :: Broker -> Frame -> (Worker, Broker)
 s_workerRequire broker identity =
-    let foundWorker = M.lookup identity (workers broker) -- TODO: use base16 encoded identity
+    let foundWorker = M.lookup identity (workers broker)
     in  case foundWorker of
-            Nothing -> createNewWorker
-            Just fw -> (fw, broker)
+         Nothing -> createNewWorker
+         Just fw -> (fw, broker)
   where createNewWorker =
-            let newWorker = Worker { wId = identity -- TODO: base16 encode this
+            let newWorker = Worker { wId = identity
+                                   , serviceName = B.empty
                                    , identityFrame = identity
                                    , expiry = 0
                                    }
@@ -271,10 +271,12 @@ s_workerSend broker worker cmd option msg = do
 s_workerWaiting :: Broker -> Service -> Worker -> IO Broker
 s_workerWaiting broker wService worker = do
     currTime <- currentTime_ms
-    let newWorker = worker { expiry = currTime + heartbeatExpiry }
-        newService = wService { sWaiting = newWorker : sWaiting wService }
-        newBroker = broker { bWaiting = newWorker : bWaiting broker
-                           , services = M.insert (name newService) newService (services broker) }
+    let newWorker = worker { expiry = currTime + heartbeatExpiry
+                           , serviceName = name wService }
+        newService = wService { sWaiting = sWaiting wService ++ [newWorker] }
+        newBroker = broker { bWaiting = bWaiting broker ++ [newWorker]
+                           , services = M.insert (name newService) newService (services broker) 
+                           , workers = M.insert (wId newWorker) newWorker (workers broker) }
     s_serviceDispatch newBroker newService Nothing
 
 
@@ -282,8 +284,9 @@ s_workerWaiting broker wService worker = do
 main :: IO ()
 main = do
     args <- getArgs
-    when (length args /= 1) $
-        error "usage: mdbroker <isVerbose(True|False)>"
+    when (length args /= 1) $ do
+        putStrLn "usage: mdbroker <isVerbose(True|False)>"
+        exitFailure
     let isVerbose = read (args !! 0) :: Bool
 
     withBroker isVerbose $ \broker -> do

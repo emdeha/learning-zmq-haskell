@@ -14,5 +14,5 @@ main = do
     let isVerbose = read (args !! 0) :: Bool
 
     withMDCli "tcp://localhost:5555" isVerbose $ \api ->
-        forM_ [0..100000] $ \i -> do
+        forM_ [0..10000] $ \i -> do
             mdSend api "echo" [pack "Hello world"]

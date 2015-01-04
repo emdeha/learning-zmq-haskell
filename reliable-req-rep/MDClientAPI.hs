@@ -54,17 +54,19 @@ mdSend api service request = do
     let wrappedRequest = [mdpcClient, pack service] ++ request
     when (verbose api) $ do
         putStrLn $ "I: Send request to " ++ service ++ " service:"
-        dumpMsg wrappedRequest 
+        dumpMsg wrappedRequest
    
     trySend (client api) wrappedRequest
   where trySend :: Socket Req -> Message -> IO Message
         trySend clientSock wrappedRequest = do
             sendMulti clientSock (N.fromList wrappedRequest)
 
-            [evts] <- poll (fromInteger $ timeout api) [Sock clientSock [In] Nothing] 
+            [evts] <- poll (fromInteger $ timeout api) [Sock clientSock [In] Nothing]
+
             if In `elem` evts
             then do
                 msg <- receiveMulti clientSock
+
                 when (verbose api) $ do
                     putStrLn "I: received reply"
                     dumpMsg msg
